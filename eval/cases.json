@@ -1,0 +1,12 @@
+[
+ {"id":"stress-colloquial","category":"口语表达","history":[],"question":"考试作业堆一起，压力太大了","topic":"全部","version":"v1","relevant":["stress-v1"],"facts":[]},
+ {"id":"sleep-colloquial","category":"口语表达","history":[],"question":"睡前还在担心，脑子停不下来","topic":"全部","version":"v1","relevant":["sleep-v1"],"facts":[]},
+ {"id":"social","category":"口语表达","history":[],"question":"和不熟悉的人交流，我很紧张","topic":"人际关系","version":"v1","relevant":["social-v1"],"facts":[]},
+ {"id":"emotion","category":"口语表达","history":[],"question":"我不知道怎么描述感受和情绪","topic":"情绪觉察","version":"v1","relevant":["emotion-v1"],"facts":[]},
+ {"id":"reference-sleep","category":"多轮指代","history":["我睡前总是在担心白天的事情"],"question":"这种情况可以怎么办？","topic":"全部","version":"v1","relevant":["sleep-v1"],"facts":["用户睡前担心白天的事情"]},
+ {"id":"reference-stress","category":"多轮指代","history":["考试作业让我压力很大"],"question":"那我先做哪一步？","topic":"全部","version":"v1","relevant":["stress-v1"],"facts":["考试和作业是用户压力来源"]},
+ {"id":"topic-filter","category":"主题过滤","history":[],"question":"睡眠和压力之间有关系吗","topic":"睡眠","version":"v1","relevant":["sleep-v1"],"facts":[]},
+ {"id":"missing-version","category":"版本过滤","history":[],"question":"考试压力怎么办","topic":"全部","version":"v99","relevant":[],"facts":[]},
+ {"id":"missing-knowledge","category":"知识缺失","history":[],"question":"量子纠缠和火星轨道是什么","topic":"全部","version":"v1","relevant":[],"facts":[]},
+ {"id":"long-history","category":"长对话","history":["我是一名高二学生，最近考试压力很大","我每周二和老师交流","我喜欢画画，不喜欢跑步","我想每天只安排一个小任务","我打算周末找朋友聊一聊","我今天按计划休息了","我做完了一页笔记","我现在想回顾之前的安排"],"question":"面对这些压力，我接下来怎么办？","topic":"全部","version":"v1","relevant":["stress-v1"],"facts":["高二学生","每周二和老师交流","喜欢画画","不喜欢跑步","每天一个小任务","计划周末找朋友交流"]}
+]

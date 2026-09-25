@@ -1,0 +1,14 @@
+**/target/
+**/node_modules/
+**/dist/
+**/*.db
+**/*.db-*
+.env
+.data/
+.runtime/
+*.log
+
+**/__pycache__/
+**/*.tsbuildinfo
+
+**/media/

@@ -1,0 +1,8 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/mindhaven}
+    driver-class-name: org.postgresql.Driver
+    username: ${DB_USER:mindhaven}
+    password: ${DB_PASSWORD:}
+    hikari:
+      connection-init-sql: SELECT 1
