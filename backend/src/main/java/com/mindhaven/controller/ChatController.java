@@ -7,7 +7,7 @@ import com.mindhaven.model.chat.Session;
 import com.mindhaven.model.dto.ChatCommand;
 import com.mindhaven.model.vo.SummaryResponse;
 import com.mindhaven.service.ai.*;
-import com.mindhaven.service.chat.ChatService;
+import com.mindhaven.service.chat.SessionService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -18,39 +18,39 @@ import java.util.*;
 @RestController
 @RequestMapping("/api")
 public class ChatController {
-    private final ChatService chat;
+    private final SessionService sessions;
     private final ChatRunService runs;
     private final RunEventStream streams;
 
-    public ChatController(ChatService chat, ChatRunService runs, RunEventStream streams) {
-        this.chat = chat;
+    public ChatController(SessionService sessions, ChatRunService runs, RunEventStream streams) {
+        this.sessions = sessions;
         this.runs = runs;
         this.streams = streams;
     }
 
     @GetMapping("/sessions")
     public List<Session> sessions() {
-        return chat.sessions();
+        return sessions.sessions();
     }
 
     @PostMapping("/sessions")
     public Session create() {
-        return chat.create();
+        return sessions.create();
     }
 
     @GetMapping("/sessions/{id}/messages")
     public List<ChatMessage> messages(@PathVariable String id) {
-        return chat.history(id);
+        return sessions.history(id);
     }
 
     @GetMapping("/sessions/{id}/summary")
     public SummaryResponse summary(@PathVariable String id) {
-        return chat.summary(id).map(SummaryResponse::from).orElseGet(SummaryResponse::empty);
+        return sessions.summary(id).map(SummaryResponse::from).orElseGet(SummaryResponse::empty);
     }
 
     @GetMapping("/metrics")
     public List<Metrics> metrics() {
-        return chat.metrics();
+        return sessions.metrics();
     }
 
     /**

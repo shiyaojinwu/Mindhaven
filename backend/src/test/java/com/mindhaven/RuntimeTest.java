@@ -1,5 +1,8 @@
 package com.mindhaven;
 
+import com.mindhaven.service.chat.SessionService;
+import com.mindhaven.model.chat.ChatEvent;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mindhaven.common.error.HttpProblem;
 import com.mindhaven.integration.ai.*;
@@ -30,7 +33,7 @@ import java.util.*;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
@@ -42,6 +45,8 @@ class RuntimeTest {
     AuthService auth;
     @Autowired
     ChatService chat;
+    @Autowired
+    SessionService sessionService;
     @Autowired
     ChatRunService runtime;
     @Autowired
@@ -75,7 +80,7 @@ class RuntimeTest {
 
     @Test
     void repeatedRequestAndEventReplayDoNotRepeatModelWork() {
-        var session = chat.create();
+        var session = sessionService.create();
         var input = command("学习压力有点大", UUID.randomUUID().toString());
         var first = runtime.create(session.id(), input);
         assertThat(runtime.create(session.id(), input).id()).isEqualTo(first.id());
@@ -84,7 +89,7 @@ class RuntimeTest {
         assertThat(events).extracting(AiRun.Event::name).contains("sources", "delta", "done");
         assertThat(runtime.create(session.id(), input).id()).isEqualTo(first.id());
         assertThat(runtime.events(first.id(), events.getFirst().seq())).isEqualTo(events.subList(1, events.size()));
-        assertThat(chat.history(session.id())).hasSize(2);
+        assertThat(sessionService.history(session.id())).hasSize(2);
         assertThat(usage.recent(first.id())).hasSize(1).allMatch(u -> u.source().equals("demo") && u.inputTokens() == 0 && u.promptHash().length() == 64);
         assertThatThrownBy(() -> runtime.create(session.id(), command("另一条问题", input.requestId()))).isInstanceOf(HttpProblem.class);
     }
@@ -92,18 +97,18 @@ class RuntimeTest {
     @Test
     void casualMessagesUseAnswerGatewayWithoutRetrievalOrRewrite() {
         for (String text : List.of("吃饭", "你好")) {
-            var session = chat.create();
+            var session = sessionService.create();
             var run = runtime.create(session.id(), command(text, UUID.randomUUID().toString()));
             completed(run.id());
             assertThat(usage.recent(run.id())).hasSize(1).allMatch(u -> u.purpose().equals("answer") && u.status().equals("COMPLETED"));
-            assertThat(chat.history(session.id()).getLast().citations()).isEmpty();
+            assertThat(sessionService.history(session.id()).getLast().citations()).isEmpty();
             assertThat(runtime.events(run.id(), 0)).extracting(AiRun.Event::name).contains("delta", "done");
         }
     }
 
     @Test
     void runEventsCancellationAndUsageStayOwned() {
-        var s = chat.create();
+        var s = sessionService.create();
         var r = runtime.create(s.id(), command("我想聊聊考试", "one"));
         completed(r.id());
         var original = TenantContext.require();
@@ -119,12 +124,13 @@ class RuntimeTest {
     @Test
     void cancellationKeepsPartialEventsAndBlocksLateCompletion() throws Exception {
         var fake = mock(ChatService.class);
-        when(fake.session(anyString())).thenReturn(new Session("test", "test", "now"));
+        var fakeSessions = mock(SessionService.class);
+        when(fakeSessions.session(anyString())).thenReturn(new Session("test", "test", "now"));
         var emitted = new CountDownLatch(1);
         var stopped = new CountDownLatch(1);
         doAnswer(call -> {
-            BiConsumer<String, Object> emit = call.getArgument(5);
-            emit.accept("delta", Map.of("text", "已生成的部分"));
+            Consumer<ChatEvent> emit = call.getArgument(5);
+            emit.accept(new ChatEvent.Delta("已生成的部分"));
             emitted.countDown();
             try {
                 new CountDownLatch(1).await();
@@ -133,7 +139,7 @@ class RuntimeTest {
             }
             return null;
         }).when(fake).turn(anyString(), anyString(), anyString(), anyString(), anyBoolean(), any(), any());
-        var isolated = new ChatRunService(OpenTelemetry.noop().getTracer("test"), fake, runs, json, 30, 24000);
+        var isolated = new ChatRunService(OpenTelemetry.noop().getTracer("test"), fake, fakeSessions, runs, json, 30, 24000);
         try {
             var run = isolated.create("test", command("测试取消", "cancel"));
             assertThat(emitted.await(3, TimeUnit.SECONDS)).isTrue();
@@ -151,7 +157,7 @@ class RuntimeTest {
 
     @Test
     void startupMarksAbandonedRunsWithoutRepeatingThem() {
-        var s = chat.create();
+        var s = sessionService.create();
         var r = runs.create(s.id(), "abandoned", "hash", "text").run();
         runs.start(r.id());
         runs.append(r.id(), "delta", Map.of("text", "partial"));
@@ -159,20 +165,20 @@ class RuntimeTest {
         assertThat(runs.get(r.id()).status()).isEqualTo(AiRun.Status.INTERRUPTED);
         assertThat(runs.events(r.id(), 0)).hasSize(1);
         assertThat(runs.create(s.id(), "abandoned", "hash", "text").fresh()).isFalse();
-        assertThat(chat.history(s.id())).isEmpty();
+        assertThat(sessionService.history(s.id())).isEmpty();
     }
 
     @Test
     void urgentMessageBypassesModelAndSummaryEvenWithHistory() {
-        var s = chat.create();
+        var s = sessionService.create();
         for (int i = 0; i < 5; i++)
-            chat.turn(s.id(), "考试压力", "全部", "v1", true, (n, d) -> {
+            chat.turn(s.id(), "考试压力", "全部", "v1", true, event -> {
             });
         var r = runtime.create(s.id(), command("我想伤害自己", "urgent"));
         completed(r.id());
         assertThat(usage.recent(r.id())).isEmpty();
-        assertThat(chat.history(s.id()).getLast().content()).contains("急救");
-        assertThat(chat.history(s.id()).getLast().citations()).isEmpty();
+        assertThat(sessionService.history(s.id()).getLast().content()).contains("急救");
+        assertThat(sessionService.history(s.id()).getLast().citations()).isEmpty();
     }
 
     @Test
@@ -207,4 +213,24 @@ class RuntimeTest {
         }
         assertThat(RunContext.id()).isNull();
     }
+    @Test
+    void commitCallbackFailureRollsBackMessagesMetricsAndRuntimeCompletionTogether() {
+        var session = sessionService.create();
+        var run = runs.create(session.id(), "rollback", "hash", "你好").run();
+        assertThat(runs.start(run.id())).isTrue();
+        int before = sessionService.metrics().size();
+        assertThatThrownBy(() -> chat.turn(session.id(), "你好", "全部", "v1", true,
+                event -> { }, result -> {
+                    runs.finish(run.id(), AiRun.Status.COMPLETED, "done", result, null);
+                    throw new IllegalStateException("rollback completed turn");
+                })).isInstanceOf(IllegalStateException.class);
+        assertThat(sessionService.history(session.id())).hasSize(1)
+                .allMatch(message -> message.role().equals("user") && message.status().equals("failed"));
+        assertThat(sessionService.metrics()).hasSize(before);
+        assertThat(sessionService.session(session.id()).title()).isEqualTo("新的对话");
+        assertThat(runs.get(run.id()).status()).isEqualTo(AiRun.Status.RUNNING);
+        assertThat(runs.events(run.id(), 0)).noneMatch(event -> event.name().equals("done"));
+        runs.finish(run.id(), AiRun.Status.FAILED, "error", Map.of("message", "test cleanup"), "test cleanup");
+    }
+
 }

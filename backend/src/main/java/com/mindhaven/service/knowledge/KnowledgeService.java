@@ -12,7 +12,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class KnowledgeService {
@@ -40,19 +39,10 @@ public class KnowledgeService {
         return store.get(id).orElseThrow(() -> new NoSuchElementException("知识片段不存在"));
     }
 
-    public synchronized int index() {
-        var vector = vectors.getIfAvailable();
-        if (vector == null) throw new IllegalArgumentException("当前为本地 BM25 检索，无需向量索引");
-        var documents = all();
-        if (documents.isEmpty()) return 0;
-        String tenant = TenantContext.require().tenantId();
-        return ai.embedding("knowledge-embedding", documents.stream().map(Knowledge::text).collect(Collectors.joining("\n")), () -> {
-            vector.index(tenant, documents);
-            return documents.size();
-        });
-    }
-
     public synchronized Knowledge add(String title, String topic, String version, String url, String text) {
+        var existing = all().stream().filter(k -> k.title().equals(title) && k.topic().equals(topic)
+                && k.version().equals(version) && k.sourceUrl().equals(url) && k.text().equals(text)).findFirst();
+        if (existing.isPresent()) return existing.get();
         // Immutable chunks: updates become a new ID and can be pinned by version.
         Knowledge k = new Knowledge(UUID.randomUUID().toString(), title, topic, version, url, text);
         store.save(k);

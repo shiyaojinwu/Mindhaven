@@ -1,5 +1,8 @@
 package com.mindhaven;
 
+import com.mindhaven.service.chat.SessionService;
+import com.mindhaven.model.chat.ChatEvent;
+
 import com.mindhaven.model.dto.ChatCommand;
 import com.mindhaven.observability.TraceSupport;
 import com.mindhaven.security.TenantContext;
@@ -34,6 +37,8 @@ class TracingTest {
     @Autowired
     ChatService chat;
     @Autowired
+    SessionService sessionService;
+    @Autowired
     AuthService auth;
     @Autowired
     MockMvc mvc;
@@ -51,7 +56,7 @@ class TracingTest {
         var parent = tracer.spanBuilder("test.parent").startSpan();
         String traceId = parent.getSpanContext().getTraceId();
         try (var identity = TenantContext.open(login.identity()); var scope = new TraceSupport(parent)) {
-            var run = runs.create(chat.create().id(), new ChatCommand("你好", "全部", "v1", true, UUID.randomUUID().toString()));
+            var run = runs.create(sessionService.create().id(), new ChatCommand("你好", "全部", "v1", true, UUID.randomUUID().toString()));
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(output.getOut()).contains("operation=ai.run").contains("runId=" + run.id()));
             assertThat(output.getOut().lines().filter(s -> s.contains("operation=ai.run") && s.contains("runId=" + run.id())).findFirst().orElseThrow()).contains("traceId=" + traceId).contains("parentSpanId=" + parent.getSpanContext().getSpanId());
             assertThat(output.getOut().lines().filter(s -> s.contains("operation=AiOperations.stream") && s.contains("traceId=" + traceId)).count()).isPositive();

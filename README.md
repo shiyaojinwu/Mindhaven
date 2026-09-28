@@ -163,7 +163,7 @@ Apple 芯片 Mac 可在项目内安装固定版本的 Qdrant 与 Ollama 官方�
 
 退出时会停止本次脚本启动的 Ollama 和原生 Qdrant，复用的已有进程不受影响。原生 Qdrant 数据保存在 `.data/qdrant`，模型保存在 `.data/ollama/models`；可通过 `OLLAMA_MODELS` 复用其他模型目录。Qdrant 容器单独保留，可运行 `docker compose stop qdrant` 停止，数据卷不会删除。更换原生/容器运行方式不会自动迁移索引，需重新同步知识；两种方式的持久化位置不同。
 
-然后在聊天页面打开「知识与检索设置」，点击「同步向量索引」。该操作会调用 Embedding 服务。原文存在 SQLite，Qdrant 保存片段内容、向量和过滤元数据，引用快照随每条回答保存。
+然后在聊天页面打开「知识与检索设置」，点击「同步向量索引」。该操作仅为新增或变化的片段调用 Embedding 服务；重复同步跳过已成功且指纹一致的片段。页面显示已同步、待同步和失败数量，失败后重试会保留已完成的进度。原文存在 SQLite，Qdrant 保存片段内容、向量和过滤元数据，引用快照随每条回答保存。
 
 默认 `EMBEDDING_MODEL=embeddinggemma`。未指定 `QDRANT_COLLECTION` 时，脚本为默认模型选择 `mindhaven_embeddinggemma_v1`，为旧 `bge-m3` 选择原集合名，其他模型按名称哈希生成集合名。手动启动后端时默认也是 EmbeddingGemma 集合；切换模型需手动指定新集合。已有 `.env` 中的显式模型和集合配置优先，不会被脚本改写。相同模型名的权重版本升级也需指定新集合、重新同步索引。
 
@@ -246,7 +246,7 @@ python3 scripts/evaluate.py --base http://127.0.0.1:8080 --output eval/latest.js
 
 ```bash
 cd backend && mvn test
-cd ../frontend && npm ci && npm run build
+cd ../frontend && npm ci && npm test && npm run build
 ```
 
 - `backend/src/main/java/com/mindhaven/`：业务、接口和模型适配。
@@ -320,7 +320,23 @@ com.mindhaven/
 
 Controller 负责请求校验、协议与响应，课程发布事务、报告生成、视频权限等由 Service 处理；数据库访问通过 Manager 和 Mapper，外部服务通过 integration 接口接入。SSE 生命周期和 HTTP Range 流式响应留在 Web 层。当前是实用分层，不是完全无框架依赖的领域模型：聊天上下文仍使用 Spring AI 消息类型，文件上传接口仍使用 MultipartFile；知识检索通过 `KnowledgeVectorIndex` 接口隔离 Qdrant 适配。
 
-前端按 `features/home`、`chat`、`surveys`、`courses`、`admin` 组织功能；聊天协议位于 `features/chat/api.ts`，状态位于 `useChat.ts`，组件负责展示。`shared` 管理编辑离开提醒，`styles/tokens.css` 管理主题。评测脚本递归记录 Java 源码哈希。
+前端使用 Vue Router 管理页面、登录与权限跳转，目录按职责划分：
+
+```text
+frontend/src/
+├── main.ts / App.vue  # 应用入口
+├── router/           # 路由、登录与权限守卫
+├── layouts/          # 登录后的布局和跨页面状态
+├── views/            # 业务页面及其专用组件、组合式函数
+├── components/       # 公共组件
+├── composables/      # 登录、未保存提醒等公共逻辑
+├── api/              # HTTP、SSE、上传及各业务接口
+├── types/            # 接口和业务类型
+├── utils/            # 日期、SSE 解析等工具
+└── styles/           # 全局样式与主题变量
+```
+
+页面通过 `api` 调用后端，业务状态由对应的 `use*.ts` 管理。评测脚本递归记录 Java 源码哈希。
 
 ### 对话意图与资料边界
 
@@ -364,3 +380,19 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
 Span 属性包含检索模式和结果数量、上下文预算、摘要版本、引用数量、模型与提示词哈希、用量来源及排队耗时；Events 记录阶段开始、完成、失败及模型首段返回。`ai.first_chunk_ms` 从单次模型调用开始计时，与整轮 `firstTokenMs` 不同；HTTP Span 只统计请求分派，生成总耗时查看 `ai.run`。SSE 重连是独立请求，通过 runId 关联。
 
 仅记录操作元数据，不记录聊天正文、提示词全文、检索原文、凭证、完整 URL 或异常正文。目前没有逐条 SQL、Qdrant 内部或外部模型服务的跨服务 Span；runId 与 traceId 通过日志及导出 Span 关联，未写入任务表，旧任务不会补生成 Trace。
+
+## 索引维护与贡献
+
+索引状态由 Flyway V4 写入业务数据库，按租户、Embedding 服务/模型/修订版及 Qdrant 集合隔离。每个片段写入前记录待处理状态，远端成功后才标记已同步；中途失败会停止本次同步，重试跳过已成功的片段。相同标题、主题、版本、来源和正文的重复录入返回已有片段。
+
+同一机构只能同时进行一次同步，不阻塞其他机构的新增知识；当前同步仍是同步 HTTP 请求，适合本地小型知识库，不是持久化后台任务。状态表示最近写入结果，不实时检查远端集合；若清空或恢复了 Qdrant 数据，请在「索引维护」中重新同步全部片段。模型权重改变时设置新的 `EMBEDDING_REVISION`（默认 `v1`）并使用新集合，避免不同向量空间混用。数据库与 Qdrant 之间没有分布式事务，发生不确定写入时依靠稳定 Point ID 重试。
+
+贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题反馈见 [SECURITY.md](SECURITY.md)。GitHub Actions 配置检查 JDK 21 后端测试、前端 SSE 协议测试、类型与构建，以及启动脚本回归；真实供应商调用与质量评测单独执行。项目许可证尚未确定，公开源码不代表已授予开源再分发许可。
+
+### 聊天与前端职责
+
+`SessionService` 负责会话、历史、摘要及指标查询；`ChatService` 编排一轮对话，委托 `QueryRewriteService` 改写问题、`ConversationContextService` 准备上下文、`ChatCommitService` 提交结果。`ChatCommitService` 的事务同时包含完整消息、指标、标题及运行完成回调；回调失败会一起回滚。`ChatRunService` 保留排队、取消、超时及事件持久化职责。
+
+内部通过 `ChatEvent.Delta`、`Sources`、`Done` 传递强类型事件，在运行层转换为原有 SSE 名称和 JSON，客户端协议不变。
+
+前端 `layouts/WorkspaceLayout.vue` 负责导航、初始加载与公共提示，通过 `RouterView` 展示页面；聊天状态保留在布局层，切换页面不会重新创建。课程、报告、树洞和知识库分别通过各自 `use*.ts` 管理状态，列表与详情组件负责展示；`components/AppDialog.vue` 统一处理弹窗、键盘焦点与关闭行为。

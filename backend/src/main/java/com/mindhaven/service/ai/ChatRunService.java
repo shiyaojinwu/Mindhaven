@@ -11,6 +11,8 @@ import com.mindhaven.observability.TraceSupport;
 import com.mindhaven.security.LoginIdentity;
 import com.mindhaven.security.TenantContext;
 import com.mindhaven.service.chat.ChatService;
+import com.mindhaven.service.chat.SessionService;
+import com.mindhaven.model.chat.ChatEvent;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
@@ -30,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ChatRunService implements AutoCloseable {
     private final Tracer tracer;
     private final ChatService chat;
+    private final SessionService sessions;
     private final RunManager runs;
     private final ObjectMapper json;
     private final int deadlineSeconds;
@@ -45,9 +48,10 @@ public class ChatRunService implements AutoCloseable {
         volatile ScheduledFuture<?> timeout;
     }
 
-    public ChatRunService(Tracer tracer, ChatService chat, RunManager runs, ObjectMapper json, @Value("${mindhaven.runtime.deadline-seconds:180}") int deadlineSeconds, @Value("${mindhaven.runtime.token-budget:24000}") int tokenBudget) {
+    public ChatRunService(Tracer tracer, ChatService chat, SessionService sessions, RunManager runs, ObjectMapper json, @Value("${mindhaven.runtime.deadline-seconds:180}") int deadlineSeconds, @Value("${mindhaven.runtime.token-budget:24000}") int tokenBudget) {
         this.tracer = tracer;
         this.chat = chat;
+        this.sessions = sessions;
         this.runs = runs;
         this.json = json;
         this.deadlineSeconds = deadlineSeconds;
@@ -60,7 +64,7 @@ public class ChatRunService implements AutoCloseable {
     }
 
     public AiRun create(String session, ChatCommand input) {
-        chat.session(session);
+        sessions.session(session);
         if (input.requestId() == null || input.requestId().isBlank()) throw new HttpProblem(400, "缺少请求标识");
         String hash;
         try {
@@ -121,28 +125,25 @@ public class ChatRunService implements AutoCloseable {
             if (!runs.start(id)) throw new CancellationException();
             StringBuilder pending = new StringBuilder();
             long[] last = {0};
-            chat.turn(runs.get(id).sessionId(), input.message(), input.topic(), input.version(), input.rewrite(), (name, data) -> {
+            chat.turn(runs.get(id).sessionId(), input.message(), input.topic(), input.version(), input.rewrite(), event -> {
                 RunContext.check();
-                if (name.equals("delta")) {
-                    pending.append(((Map<?, ?>) data).get("text"));
-                    long now = System.nanoTime();
-                    if (last[0] == 0 || pending.length() >= 48 || now - last[0] >= 100_000_000L) {
-                        runs.append(id, "delta", Map.of("text", pending.toString()));
-                        pending.setLength(0);
-                        last[0] = now;
+                switch (event) {
+                    case ChatEvent.Delta delta -> {
+                        pending.append(delta.text());
+                        long now = System.nanoTime();
+                        if (last[0] == 0 || pending.length() >= 48 || now - last[0] >= 100_000_000L) {
+                            flushPending(id, pending);
+                            last[0] = now;
+                        }
                     }
-                } else {
-                    if (!pending.isEmpty()) {
-                        runs.append(id, "delta", Map.of("text", pending.toString()));
-                        pending.setLength(0);
+                    case ChatEvent.Sources sources -> {
+                        flushPending(id, pending);
+                        runs.append(id, "sources", sources.citations());
                     }
-                    if (!name.equals("done")) runs.append(id, name, data);
+                    case ChatEvent.Done ignored -> flushPending(id, pending);
                 }
             }, result -> {
-                if (!pending.isEmpty()) {
-                    runs.append(id, "delta", Map.of("text", pending.toString()));
-                    pending.setLength(0);
-                }
+                flushPending(id, pending);
                 runs.finish(id, AiRun.Status.COMPLETED, "done", result, null);
             });
         } catch (Exception e) {
@@ -164,12 +165,19 @@ public class ChatRunService implements AutoCloseable {
         }
     }
 
+    private void flushPending(String id, StringBuilder pending) {
+        if (!pending.isEmpty()) {
+            runs.append(id, "delta", new ChatEvent.Delta(pending.toString()));
+            pending.setLength(0);
+        }
+    }
+
     public AiRun get(String id) {
         return runs.get(id);
     }
 
     public List<AiRun> recent(String session) {
-        chat.session(session);
+        sessions.session(session);
         return runs.recent(session);
     }
 

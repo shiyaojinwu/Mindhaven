@@ -1,5 +1,8 @@
 package com.mindhaven;
 
+import com.mindhaven.service.chat.SessionService;
+import com.mindhaven.model.chat.ChatEvent;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mindhaven.config.Settings;
 import com.mindhaven.manager.RecordManager;
@@ -40,6 +43,8 @@ class ApplicationTest {
     MockMvc mvc;
     @Autowired
     ChatService chat;
+    @Autowired
+    SessionService sessionService;
     @Autowired
     RecordManager store;
     @Autowired
@@ -115,34 +120,34 @@ class ApplicationTest {
 
     @Test
     void chatPersistsCitationsAndSeparatesSessions() {
-        var a = chat.create();
-        var b = chat.create();
-        chat.turn(a.id(), "考试压力很大", "全部", "v1", true, (n, d) -> {
+        var a = sessionService.create();
+        var b = sessionService.create();
+        chat.turn(a.id(), "考试压力很大", "全部", "v1", true, event -> {
         });
-        assertThat(chat.history(a.id())).hasSize(2).allMatch(m -> m.status().equals("complete"));
-        assertThat(chat.history(a.id()).getLast().citations()).extracting(Citation::id).contains("stress-v1");
-        assertThat(chat.history(b.id())).isEmpty();
-        assertThat(chat.history(a.id()).getLast().citationCheck().status()).isEqualTo(CitationCheck.Status.VALID);
-        assertThat(chat.metrics().getFirst().retrievalMode()).isEqualTo("bm25");
-        assertThat(chat.metrics().getFirst().contextIds()).contains("stress-v1");
+        assertThat(sessionService.history(a.id())).hasSize(2).allMatch(m -> m.status().equals("complete"));
+        assertThat(sessionService.history(a.id()).getLast().citations()).extracting(Citation::id).contains("stress-v1");
+        assertThat(sessionService.history(b.id())).isEmpty();
+        assertThat(sessionService.history(a.id()).getLast().citationCheck().status()).isEqualTo(CitationCheck.Status.VALID);
+        assertThat(sessionService.metrics().getFirst().retrievalMode()).isEqualTo("bm25");
+        assertThat(sessionService.metrics().getFirst().contextIds()).contains("stress-v1");
     }
 
     @Test
     void incrementalSummaryAdvancesAndPlannerDoesNotInjectCoveredMessages() {
-        var s = chat.create();
-        for (int i = 0; i < 60 && chat.summary(s.id()).map(Summary::version).orElse(0) < 2; i++)
-            chat.turn(s.id(), "第" + i + "次记录，考试压力让我紧张", "学业压力", "v1", true, (n, d) -> {
+        var s = sessionService.create();
+        for (int i = 0; i < 60 && sessionService.summary(s.id()).map(Summary::version).orElse(0) < 2; i++)
+            chat.turn(s.id(), "第" + i + "次记录，考试压力让我紧张", "学业压力", "v1", true, event -> {
             });
-        Summary summary = chat.summary(s.id()).orElseThrow();
+        Summary summary = sessionService.summary(s.id()).orElseThrow();
         assertThat(summary.version()).isGreaterThanOrEqualTo(2);
         assertThat(summary.coveredThroughSeq()).isGreaterThan(2);
-        var plan = planner.plan(chat.history(s.id()), summary, "我今天可以做什么", knowledge.search("压力", "学业压力", "v1", 3), settings);
+        var plan = planner.plan(sessionService.history(s.id()), summary, "我今天可以做什么", knowledge.search("压力", "学业压力", "v1", 3), settings);
         assertThat(plan.estimate()).isLessThanOrEqualTo(settings.contextBudget() - settings.outputBudget());
         assertThat(plan.messages().get(0).getText()).doesNotContain(summary.content());
         assertThat(plan.messages().get(1).getText()).contains("<conversation_summary>", summary.content());
         int turnMessages = plan.messages().size() - 3;
         assertThat(turnMessages % 2).isZero();
-        assertThat(plan.messages().subList(2, plan.messages().size() - 1).stream().map(m -> m.getText()).toList()).doesNotContain(chat.history(s.id()).getFirst().content());
+        assertThat(plan.messages().subList(2, plan.messages().size() - 1).stream().map(m -> m.getText()).toList()).doesNotContain(sessionService.history(s.id()).getFirst().content());
     }
 
     @Test
@@ -169,23 +174,23 @@ class ApplicationTest {
 
     @Test
     void failedStreamIsNotIncludedInFutureContext() {
-        var s = chat.create();
-        assertThatThrownBy(() -> chat.turn(s.id(), "考试压力", "全部", "v1", true, (n, d) -> {
-            if (n.equals("delta")) throw new IllegalStateException("disconnect");
+        var s = sessionService.create();
+        assertThatThrownBy(() -> chat.turn(s.id(), "考试压力", "全部", "v1", true, event -> {
+            if (event instanceof ChatEvent.Delta) throw new IllegalStateException("disconnect");
         })).isInstanceOf(IllegalStateException.class);
-        assertThat(chat.history(s.id())).hasSize(1);
-        assertThat(chat.history(s.id()).getFirst().status()).isEqualTo("failed");
-        chat.turn(s.id(), "睡前担心", "全部", "v1", true, (n, d) -> {
+        assertThat(sessionService.history(s.id())).hasSize(1);
+        assertThat(sessionService.history(s.id()).getFirst().status()).isEqualTo("failed");
+        chat.turn(s.id(), "睡前担心", "全部", "v1", true, event -> {
         });
-        assertThat(chat.history(s.id()).stream().filter(m -> m.status().equals("complete"))).hasSize(2);
+        assertThat(sessionService.history(s.id()).stream().filter(m -> m.status().equals("complete"))).hasSize(2);
     }
 
     @Test
     void safetyBranchDoesNotInventKnowledgeCitations() {
-        var s = chat.create();
-        chat.turn(s.id(), "我想伤害自己", "全部", "v1", true, (n, d) -> {
+        var s = sessionService.create();
+        chat.turn(s.id(), "我想伤害自己", "全部", "v1", true, event -> {
         });
-        var reply = chat.history(s.id()).getLast();
+        var reply = sessionService.history(s.id()).getLast();
         assertThat(reply.content()).contains("急救");
         assertThat(reply.citations()).isEmpty();
     }
@@ -197,11 +202,11 @@ class ApplicationTest {
 
     @Test
     void completedTurnSurvivesDoneEventDisconnect() {
-        var session = chat.create();
-        assertThatThrownBy(() -> chat.turn(session.id(), "考试压力", "全部", "v1", true, (n, d) -> {
-            if (n.equals("done")) throw new IllegalStateException("disconnect");
+        var session = sessionService.create();
+        assertThatThrownBy(() -> chat.turn(session.id(), "考试压力", "全部", "v1", true, event -> {
+            if (event instanceof ChatEvent.Done) throw new IllegalStateException("disconnect");
         })).isInstanceOf(IllegalStateException.class);
-        assertThat(chat.history(session.id())).hasSize(2).allMatch(m -> m.status().equals("complete"));
+        assertThat(sessionService.history(session.id())).hasSize(2).allMatch(m -> m.status().equals("complete"));
     }
 
     @Test
@@ -219,27 +224,27 @@ class ApplicationTest {
     @Test
     void bareTopicCannotInheritFactsFromMatchingKnowledge() {
         knowledge.add("吃饭", "生活", "v1", "", "慢慢吃，演示资料");
-        var session = chat.create();
-        chat.turn(session.id(), "吃饭", "全部", "v1", true, (n, d) -> {
+        var session = sessionService.create();
+        chat.turn(session.id(), "吃饭", "全部", "v1", true, event -> {
         });
-        var answer = chat.history(session.id()).getLast();
+        var answer = sessionService.history(session.id()).getLast();
         assertThat(answer.content()).isNotBlank().doesNotContain("慢慢吃");
         assertThat(answer.citations()).isEmpty();
         assertThat(answer.citationCheck().status()).isEqualTo(CitationCheck.Status.NOT_REQUIRED);
-        assertThat(chat.metrics().getFirst().retrievalMode()).isEqualTo("clarification");
-        assertThat(chat.metrics().getFirst().model()).isEqualTo("deterministic-demo");
+        assertThat(sessionService.metrics().getFirst().retrievalMode()).isEqualTo("clarification");
+        assertThat(sessionService.metrics().getFirst().model()).isEqualTo("deterministic-demo");
     }
 
     @Test
     void contextualPronounStillUsesHistoryAndRetrieval() {
-        var session = chat.create();
-        chat.turn(session.id(), "最近考试压力很大", "全部", "v1", true, (n, d) -> {
+        var session = sessionService.create();
+        chat.turn(session.id(), "最近考试压力很大", "全部", "v1", true, event -> {
         });
-        chat.turn(session.id(), "那怎么办？", "全部", "v1", true, (n, d) -> {
+        chat.turn(session.id(), "那怎么办？", "全部", "v1", true, event -> {
         });
-        assertThat(chat.metrics().getFirst().retrievalMode()).isEqualTo("bm25");
-        assertThat(chat.metrics().getFirst().rewrittenQuery()).contains("考试压力");
-        assertThat(chat.history(session.id()).getLast().citations()).extracting(Citation::id).contains("stress-v1");
+        assertThat(sessionService.metrics().getFirst().retrievalMode()).isEqualTo("bm25");
+        assertThat(sessionService.metrics().getFirst().rewrittenQuery()).contains("考试压力");
+        assertThat(sessionService.history(session.id()).getLast().citations()).extracting(Citation::id).contains("stress-v1");
     }
 
     @Test

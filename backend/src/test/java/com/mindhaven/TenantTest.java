@@ -1,4 +1,8 @@
 package com.mindhaven;
+import com.mindhaven.common.Times;
+
+import com.mindhaven.service.chat.SessionService;
+import com.mindhaven.model.chat.ChatEvent;
 
 import com.mindhaven.common.error.HttpProblem;
 import com.mindhaven.manager.RecordManager;
@@ -45,6 +49,8 @@ class TenantTest {
     @Autowired
     ChatService chat;
     @Autowired
+    SessionService sessionService;
+    @Autowired
     KnowledgeService knowledge;
     @Autowired
     JdbcTemplate jdbc;
@@ -80,6 +86,7 @@ class TenantTest {
         for (String path : List.of("/api/admin/surveys", "/api/admin/members"))
             mvc.perform(get(path).cookie(cookie(member))).andExpect(status().isForbidden());
         mvc.perform(post("/api/knowledge/index").cookie(cookie(member))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/knowledge/index/status").cookie(cookie(member))).andExpect(status().isForbidden());
         mvc.perform(post("/api/admin/surveys").cookie(cookie(member)).contentType("application/json").content("{}")).andExpect(status().isForbidden());
     }
 
@@ -87,9 +94,9 @@ class TenantTest {
     void sharedResourcesAreTenantScopedAndPrivateResourcesAreUserScoped() throws Exception {
         String session, id;
         try (var scope = TenantContext.open(a.identity())) {
-            session = chat.create().id();
+            session = sessionService.create().id();
             id = knowledge.add("A私有材料", "自定义", "v9", "", "只有A机构可以使用的知识").id();
-            store.put("posts", "same-id", new Post("same-id", "A私密", "记录", 0, ChatService.now()));
+            store.put("posts", "same-id", new Post("same-id", "A私密", "记录", 0, Times.now()));
         }
         mvc.perform(get("/api/sessions/" + session + "/messages").cookie(cookie(b))).andExpect(status().isNotFound());
         mvc.perform(get("/api/sessions/" + session + "/messages").cookie(cookie(member))).andExpect(status().isNotFound());
@@ -173,13 +180,13 @@ class TenantTest {
         for (var login : List.of(a, b, member, a)) {
             String id;
             try (var scope = TenantContext.open(login.identity())) {
-                id = chat.create().id();
+                id = sessionService.create().id();
             }
             var result = mvc.perform(post("/api/sessions/" + id + "/chat").cookie(cookie(login)).contentType("application/json").content("{\"message\":\"考试压力\",\"topic\":\"全部\",\"version\":\"v1\",\"rewrite\":true}")).andExpect(request().asyncStarted()).andReturn();
             result.getAsyncResult(10000);
             mvc.perform(asyncDispatch(result)).andExpect(status().isOk()).andExpect(content().string(Matchers.containsString("event:done")));
             try (var scope = TenantContext.open(login.identity())) {
-                assertThat(chat.history(id)).hasSize(2);
+                assertThat(sessionService.history(id)).hasSize(2);
             }
             assertThatThrownBy(TenantContext::require).isInstanceOf(HttpProblem.class);
         }

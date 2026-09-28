@@ -25,3 +25,5 @@
 
 # Local development notes (not project documentation)
 /docs/code-style.md
+
+frontend/.test-dist/

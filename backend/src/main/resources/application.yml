@@ -53,6 +53,7 @@ mindhaven:
   chat-key: ${DEEPSEEK_API_KEY:}
   embedding-base-url: ${EMBEDDING_BASE_URL:http://localhost:11434}
   embedding-path: ${EMBEDDING_PATH:/v1/embeddings}
+  embedding-revision: ${EMBEDDING_REVISION:v1}
   embedding-model: ${EMBEDDING_MODEL:embeddinggemma}
   embedding-key: ${EMBEDDING_API_KEY:local}
   qdrant-host: ${QDRANT_HOST:localhost}
