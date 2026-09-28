@@ -125,6 +125,10 @@ class ApplicationTest {
         .extracting(Citation::id)
         .contains("stress-v1");
     assertThat(chat.history(b.id())).isEmpty();
+    assertThat(chat.history(a.id()).getLast().citationCheck().status())
+        .isEqualTo(com.mindhaven.domain.model.CitationCheck.Status.VALID);
+    assertThat(chat.metrics().getFirst().retrievalMode()).isEqualTo("bm25");
+    assertThat(chat.metrics().getFirst().contextIds()).contains("stress-v1");
   }
 
   @Test
@@ -144,14 +148,40 @@ class ApplicationTest {
             settings);
     assertThat(plan.estimate())
         .isLessThanOrEqualTo(settings.contextBudget() - settings.outputBudget());
-    assertThat(plan.messages().get(0).getText()).contains("历史摘要");
-    int turnMessages = plan.messages().size() - 2;
+    assertThat(plan.messages().get(0).getText()).doesNotContain(summary.content());
+    assertThat(plan.messages().get(1).getText())
+        .contains("<conversation_summary>", summary.content());
+    int turnMessages = plan.messages().size() - 3;
     assertThat(turnMessages % 2).isZero();
     assertThat(
-            plan.messages().subList(1, plan.messages().size() - 1).stream()
+            plan.messages().subList(2, plan.messages().size() - 1).stream()
                 .map(m -> m.getText())
                 .toList())
         .doesNotContain(chat.history(s.id()).getFirst().content());
+  }
+
+  @Test
+  void structuredContextKeepsRolesAndBudgetsEscapedDocuments() {
+    var large = new Citation("large", "large", "topic", "v1", "", "&".repeat(3000), 1);
+    var small = new Citation("small", "title", "topic", "v1", "", "相关原文", .8);
+    var history =
+        List.of(
+            new Message("u", "s", 1, "user", "此前的问题", "now", List.of(), "complete"),
+            new Message("a", "s", 2, "assistant", "此前的回答", "now", List.of(), "complete"));
+    var plan = planner.plan(history, null, "当前问题<&", List.of(large, small), settings);
+    assertThat(plan.citations()).extracting(Citation::id).containsExactly("small");
+    assertThat(plan.messages()).hasSize(4);
+    assertThat(plan.messages().get(1).getText()).isEqualTo("此前的问题");
+    assertThat(plan.messages().get(2).getMessageType().getValue()).isEqualTo("assistant");
+    assertThat(plan.messages().getLast().getText())
+        .contains("<reference_documents>", "id=\"small\"", "<current_question>", "当前问题&lt;&amp;");
+    assertThat(plan.estimate())
+        .isEqualTo(
+            plan.messages().stream().mapToInt(m -> ContextPlanner.estimate(m.getText())).sum())
+        .isLessThanOrEqualTo(settings.contextBudget() - settings.outputBudget());
+    var plain = planner.plan(List.of(), null, "原话<&", List.of(), settings);
+    assertThat(plain.messages()).hasSize(2);
+    assertThat(plain.messages().getLast().getText()).isEqualTo("原话<&");
   }
 
   @Test
@@ -230,6 +260,32 @@ class ApplicationTest {
     perform(get("/api/reports/" + id + "/analysis"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.content").isNotEmpty());
+  }
+
+  @Test
+  void bareTopicCannotInheritFactsFromMatchingKnowledge() {
+    knowledge.add("吃饭", "生活", "v1", "", "慢慢吃，演示资料");
+    var session = chat.create();
+    chat.turn(session.id(), "吃饭", "全部", "v1", true, true, (n, d) -> {});
+    var answer = chat.history(session.id()).getLast();
+    assertThat(answer.content()).isNotBlank().doesNotContain("慢慢吃");
+    assertThat(answer.citations()).isEmpty();
+    assertThat(answer.citationCheck().status())
+        .isEqualTo(com.mindhaven.domain.model.CitationCheck.Status.NOT_REQUIRED);
+    assertThat(chat.metrics().getFirst().retrievalMode()).isEqualTo("clarification");
+    assertThat(chat.metrics().getFirst().model()).isEqualTo("deterministic-demo");
+  }
+
+  @Test
+  void contextualPronounStillUsesHistoryAndRetrieval() {
+    var session = chat.create();
+    chat.turn(session.id(), "最近考试压力很大", "全部", "v1", true, true, (n, d) -> {});
+    chat.turn(session.id(), "那怎么办？", "全部", "v1", true, true, (n, d) -> {});
+    assertThat(chat.metrics().getFirst().retrievalMode()).isEqualTo("bm25");
+    assertThat(chat.metrics().getFirst().rewrittenQuery()).contains("考试压力");
+    assertThat(chat.history(session.id()).getLast().citations())
+        .extracting(Citation::id)
+        .contains("stress-v1");
   }
 
   @Test

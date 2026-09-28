@@ -24,7 +24,20 @@ public final class Models {
       String content,
       String createdAt,
       List<Citation> citations,
-      String status) {}
+      String status,
+      CitationCheck citationCheck) {
+    public Message(
+        String id,
+        String sessionId,
+        long seq,
+        String role,
+        String content,
+        String createdAt,
+        List<Citation> citations,
+        String status) {
+      this(id, sessionId, seq, role, content, createdAt, citations, status, null);
+    }
+  }
 
   public record Summary(
       String id, int version, long coveredThroughSeq, String content, String updatedAt) {}
@@ -110,7 +123,8 @@ public final class Models {
 
   public record TenantResponse(String id, String userId, String username, Assessment assessment) {}
 
-  public record ReportAnalysis(String id, String mode, String content, String createdAt) {}
+  public record ReportAnalysis(
+      String id, String mode, String content, String createdAt, String fingerprint) {}
 
   public record Post(String id, String content, String mood, int hugs, String createdAt) {}
 
@@ -132,5 +146,10 @@ public final class Models {
       int summaryVersion,
       long coveredThroughSeq,
       boolean citationIdsValid,
-      String createdAt) {}
+      String createdAt,
+      CitationCheck citationCheck,
+      String retrievalMode,
+      List<RetrievalResult.Match> retrievalMatches,
+      List<String> contextIds,
+      RetrievalResult.Configuration retrievalConfig) {}
 }

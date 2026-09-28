@@ -3,61 +3,57 @@ package com.mindhaven;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.mindhaven.application.knowledge.KnowledgeService;
-import com.mindhaven.common.error.HttpProblem;
-import com.mindhaven.domain.model.Models.*;
-import com.mindhaven.domain.port.RecordStore;
-import com.mindhaven.security.TenantContext;
+import com.mindhaven.domain.model.Models.Knowledge;
+import com.mindhaven.infrastructure.ai.QdrantKnowledgeIndex;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.*;
-import org.springframework.beans.factory.ObjectProvider;
 
 class VectorTenantTest {
+  private Document document(String tenant, String topic, String version, String chunk) {
+    return Document.builder()
+        .text("payload")
+        .metadata(Map.of("tenantId", tenant, "topic", topic, "version", version, "chunkId", chunk))
+        .build();
+  }
+
   @Test
   @SuppressWarnings("unchecked")
-  void tenantIsRequiredInVectorFilterPayloadAndIds() {
-    var store = mock(RecordStore.class);
+  void tenantTopicVersionAreRequiredInFilterAndReturnedPayload() {
     var vector = mock(VectorStore.class);
-    ObjectProvider<VectorStore> provider = mock(ObjectProvider.class);
-    when(provider.getIfAvailable()).thenReturn(vector);
-    var chunk = new Knowledge("shared-chunk", "Title", "topic", "v1", "", "content");
-    when(store.list("knowledge", Knowledge.class)).thenReturn(List.of(chunk));
-    when(store.get("knowledge", "shared-chunk", Knowledge.class)).thenReturn(Optional.of(chunk));
-    var service = new KnowledgeService(store, provider);
-    var a = new TenantContext.Identity("tenant-a", "a", "A", "user-a", "admin", "ADMIN");
-    var b = new TenantContext.Identity("tenant-b", "b", "B", "user-b", "admin", "ADMIN");
+    var index = new QdrantKnowledgeIndex(vector);
     when(vector.similaritySearch(any(SearchRequest.class)))
         .thenReturn(
             List.of(
-                Document.builder()
-                    .text("foreign")
-                    .metadata(Map.of("tenantId", "tenant-b", "chunkId", "shared-chunk"))
-                    .build(),
-                Document.builder()
-                    .text("local")
-                    .metadata(Map.of("tenantId", "tenant-a", "chunkId", "shared-chunk"))
-                    .build()));
-    try (var scope = TenantContext.open(a)) {
-      service.index();
-      assertThat(service.search("query", "topic", "v1", 4)).hasSize(1);
-    }
-    try (var scope = TenantContext.open(b)) {
-      service.index();
-    }
+                document("tenant-b", "topic", "v1", "foreign"),
+                document("tenant-a", "other", "v1", "wrong-topic"),
+                document("tenant-a", "topic", "v2", "wrong-version"),
+                document("tenant-a", "topic", "v1", "local")));
+    assertThat(index.search("tenant-a", "query", "topic", "v1", 20, .35))
+        .extracting(h -> h.chunkId())
+        .containsExactly("local");
     var request = ArgumentCaptor.forClass(SearchRequest.class);
     verify(vector).similaritySearch(request.capture());
-    String expression = request.getValue().getFilterExpression().toString();
-    assertThat(expression).contains("tenantId", "tenant-a", "topic", "v1");
+    assertThat(request.getValue().getFilterExpression().toString())
+        .contains("tenantId", "tenant-a", "topic", "v1");
+    assertThat(request.getValue().getTopK()).isEqualTo(20);
+    assertThat(request.getValue().getSimilarityThreshold()).isEqualTo(.35);
+    var chunk = new Knowledge("shared", "Title", "topic", "v1", "", "content");
+    index.index("tenant-a", List.of(chunk));
+    index.index("tenant-b", List.of(chunk));
+    index.index("tenant-a", List.of(chunk));
     ArgumentCaptor<List<Document>> docs = ArgumentCaptor.forClass(List.class);
-    verify(vector, times(2)).add(docs.capture());
-    var first = docs.getAllValues().getFirst().getFirst();
-    var second = docs.getAllValues().getLast().getFirst();
-    assertThat(first.getId()).isNotEqualTo(second.getId());
-    assertThat(first.getMetadata()).containsEntry("tenantId", "tenant-a");
+    verify(vector, times(3)).add(docs.capture());
+    var first = docs.getAllValues().get(0).getFirst();
+    var second = docs.getAllValues().get(1).getFirst();
+    assertThat(first.getId())
+        .isNotEqualTo(second.getId())
+        .isEqualTo(docs.getAllValues().get(2).getFirst().getId());
+    assertThat(first.getMetadata())
+        .containsEntry("tenantId", "tenant-a")
+        .containsEntry("version", "v1");
     assertThat(second.getMetadata()).containsEntry("tenantId", "tenant-b");
-    assertThatThrownBy(TenantContext::require).isInstanceOf(HttpProblem.class);
   }
 }

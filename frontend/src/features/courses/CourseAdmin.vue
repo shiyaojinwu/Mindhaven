@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { changed, useUnsavedChanges } from "../../shared/useUnsavedChanges";
 import { ref, onMounted, onUnmounted } from "vue";
-import { api, type Course } from "./api";
+import { api, type Course } from "../../api";
 interface Draft {
   id: string;
   course: Course;
@@ -13,6 +14,12 @@ const courses = ref<Draft[]>([]),
   busy = ref(false),
   error = ref(""),
   notice = ref("");
+const baseline = ref("");
+const dirty = changed(editing, baseline);
+const leave = useUnsavedChanges(dirty);
+async function closeEditor() {
+  if (await leave()) editing.value = null;
+}
 const maxBytes = ref(512 * 1024 * 1024),
   uploading = ref(false),
   uploadPercent = ref(0);
@@ -113,11 +120,13 @@ function create() {
     publishedRevision: 0,
     status: "DRAFT",
   };
+  baseline.value = JSON.stringify(editing.value);
   error.value = "";
   notice.value = "";
 }
 function edit(d: Draft) {
   editing.value = JSON.parse(JSON.stringify(d));
+  baseline.value = JSON.stringify(editing.value);
   error.value = "";
   notice.value = "";
 }
@@ -136,6 +145,7 @@ async function save(publish: boolean) {
         expectedRevision: saved.revision,
       });
     }
+    baseline.value = JSON.stringify(editing.value);
     await load();
     notice.value = publish
       ? "课程已发布，机构成员可在微课堂中学习。"
@@ -176,7 +186,7 @@ async function archive(d: Draft) {
         type="button"
         class="text-button"
         :disabled="busy || uploading"
-        @click="editing = null"
+        @click="closeEditor"
       >
         返回课程列表
       </button>

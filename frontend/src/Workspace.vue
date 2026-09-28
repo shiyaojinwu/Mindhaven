@@ -1,7 +1,20 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from "vue";
-import SurveyPanel from "./SurveyPanel.vue";
-import AdminPanel from "./AdminPanel.vue";
+import HomePanel from "./features/home/HomePanel.vue";
+import {
+  ref,
+  computed,
+  onMounted,
+  onBeforeUnmount,
+  nextTick,
+  watch,
+  provide,
+} from "vue";
+import ChatPanel from "./features/chat/ChatPanel.vue";
+import RetrievalDiagnostics from "./features/chat/RetrievalDiagnostics.vue";
+import { useChat } from "./features/chat/useChat";
+import { provideNavigationGuard } from "./shared/useUnsavedChanges";
+import SurveyPanel from "./features/surveys/SurveyPanel.vue";
+import AdminPanel from "./features/admin/AdminPanel.vue";
 import type { Identity } from "./api";
 const props = defineProps<{ identity: Identity }>();
 const emit = defineEmits<{ logout: [] }>();
@@ -13,8 +26,6 @@ import {
   BookOpen,
   BarChart3,
   Heart,
-  ArrowUp,
-  ArrowUpRight,
   Plus,
   ChevronRight,
   Check,
@@ -30,17 +41,7 @@ import {
   Database,
   AlertCircle,
 } from "lucide-vue-next";
-import {
-  api,
-  chatStream,
-  type Session,
-  type Message,
-  type Citation,
-  type Course,
-  type Report,
-  type Post,
-  type Metric,
-} from "./api";
+import { api, type Citation, type Course, type Report, type Post } from "./api";
 const nav = [
   ...(props.identity.role === "ADMIN"
     ? [{ id: "admin", label: "机构管理", icon: Settings2 }]
@@ -52,33 +53,41 @@ const nav = [
   { id: "reports", label: "成长记录", icon: BarChart3 },
   { id: "posts", label: "心灵树洞", icon: Heart },
 ];
-const page = ref("home"),
+const { showDiscard, resolveDiscard, canLeave } = provideNavigationGuard();
+const initialPage = window.location.hash.slice(1);
+const page = ref(nav.some((n) => n.id === initialPage) ? initialPage : "home"),
   mobileMenu = ref(false),
   error = ref(""),
   notice = ref(""),
   loading = ref(true),
-  busy = ref(false),
-  sending = ref(false);
-const health = ref({ mode: "demo", retrieval: "local-keyword" }),
-  sessions = ref<Session[]>([]),
-  sessionId = ref(""),
-  messages = ref<Message[]>([]),
+  busy = ref(false);
+const chat = useChat();
+const {
+  sessions,
+  sessionId,
+  messages,
+  metrics,
+  draft,
+  topic,
+  version,
+  sending,
+  openSession,
+} = chat;
+const health = ref({
+    mode: "demo",
+    retrieval: "local-keyword",
+    retrievalStrategy: "bm25",
+  }),
   knowledge = ref<Citation[]>([]),
   courses = ref<Course[]>([]),
   completed = ref<string[]>([]),
   reports = ref<Report[]>([]),
-  posts = ref<Post[]>([]),
-  metrics = ref<Metric[]>([]);
-const draft = ref(""),
-  topic = ref("全部"),
-  version = ref("v1"),
-  activeSource = ref<Citation | null>(null),
+  posts = ref<Post[]>([]);
+const activeSource = ref<Citation | null>(null),
   activeCourse = ref<Course | null>(null),
   activeReport = ref<Report | null>(null),
   showSettings = ref(false),
   showKnowledge = ref(false),
-  chatBox = ref<HTMLElement | null>(null),
-  mood = ref(""),
   postText = ref(""),
   postMood = ref("想说说"),
   importing = ref(false);
@@ -102,10 +111,12 @@ watch(activeReport, async (r) => {
 async function analyzeReport() {
   if (!activeReport.value) return;
   await run(async () => {
-    reportAnalysis.value = await api(
-      `/reports/${activeReport.value!.id}/analysis`,
+    const id = activeReport.value!.id;
+    const result = await api<{ mode: string; content: string }>(
+      `/reports/${id}/analysis`,
       "POST",
     );
+    if (activeReport.value?.id === id) reportAnalysis.value = result;
   });
 }
 const importForm = ref({
@@ -122,7 +133,8 @@ const modalOpen = computed(
       activeCourse.value ||
       activeReport.value ||
       showSettings.value ||
-      showKnowledge.value
+      showKnowledge.value ||
+      showDiscard.value
     ),
 );
 let previousFocus: HTMLElement | null = null;
@@ -173,11 +185,24 @@ const latestMetric = computed(() =>
 );
 const date = (s: string) =>
   new Date(s).toLocaleDateString("zh-CN", { month: "long", day: "numeric" });
-function go(id: string) {
+async function go(id: string, fromHash = false) {
+  if (!nav.some((n) => n.id === id)) return;
+  if (id !== page.value && !(await canLeave())) {
+    window.history.replaceState(null, "", "#" + page.value);
+    return;
+  }
   page.value = id;
+  if (!fromHash && window.location.hash !== "#" + id)
+    window.history.pushState(null, "", "#" + id);
   mobileMenu.value = false;
   error.value = "";
 }
+async function logout() {
+  if (await canLeave()) emit("logout");
+}
+const onHashChange = () => go(window.location.hash.slice(1) || "home", true);
+onMounted(() => window.addEventListener("hashchange", onHashChange));
+onBeforeUnmount(() => window.removeEventListener("hashchange", onHashChange));
 watch(page, async (value) => {
   if (value === "courses" || value === "home") {
     try {
@@ -199,119 +224,83 @@ async function run(fn: () => Promise<void>) {
   }
 }
 async function refresh() {
-  const [h, s, k, c, p, r, po, me] = await Promise.all([
-    api<typeof health.value>("/health"),
-    api<Session[]>("/sessions"),
-    api<Citation[]>("/knowledge"),
-    api<Course[]>("/courses"),
-    api<{ id: string }[]>("/progress"),
-    api<Report[]>("/reports"),
-    api<Post[]>("/posts"),
-    api<Metric[]>("/metrics"),
-  ]);
-  health.value = h;
-  sessions.value = s;
-  knowledge.value = k;
-  courses.value = c;
-  completed.value = p.map((x) => x.id);
-  reports.value = r;
-  posts.value = po;
-  metrics.value = me;
+  const loads: Array<[string, () => Promise<void>]> = [
+    [
+      "服务状态",
+      async () => {
+        health.value = await api("/health");
+      },
+    ],
+    ["会话", chat.loadSessions],
+    [
+      "知识库",
+      async () => {
+        knowledge.value = await api("/knowledge");
+      },
+    ],
+    [
+      "课程",
+      async () => {
+        courses.value = await api("/courses");
+      },
+    ],
+    [
+      "学习记录",
+      async () => {
+        completed.value = (await api<{ id: string }[]>("/progress")).map(
+          (x) => x.id,
+        );
+      },
+    ],
+    [
+      "报告",
+      async () => {
+        reports.value = await api("/reports");
+      },
+    ],
+    [
+      "树洞",
+      async () => {
+        posts.value = await api("/posts");
+      },
+    ],
+    [
+      "指标",
+      async () => {
+        metrics.value = await api("/metrics");
+      },
+    ],
+  ];
+  const results = await Promise.allSettled(loads.map(([, load]) => load()));
+  const failed = results.flatMap((r, i) =>
+    r.status === "rejected" ? [loads[i][0]] : [],
+  );
+  if (failed.length)
+    error.value = failed.join("、") + "暂时未能加载，其他功能仍可使用。";
 }
 onMounted(async () => {
-  await run(async () => {
-    await refresh();
-    if (sessions.value[0]) await openSession(sessions.value[0].id);
-  });
+  await refresh();
+  const remembered = window.sessionStorage.getItem("mindhaven:session");
+  const selected =
+    sessions.value.find((s) => s.id === remembered) ?? sessions.value[0];
+  if (selected) {
+    try {
+      await openSession(selected.id);
+    } catch (e) {
+      chat.error.value = (e as Error).message;
+    }
+  }
   loading.value = false;
 });
-async function scroll() {
-  await nextTick();
-  chatBox.value?.scrollTo({
-    top: chatBox.value.scrollHeight,
-    behavior: "smooth",
-  });
-}
-async function openSession(id: string) {
-  if (sending.value) return;
-  const list = await api<Message[]>(`/sessions/${id}/messages`);
-  sessionId.value = id;
-  messages.value = list;
-  await scroll();
-}
 async function newSession() {
-  if (sending.value) return;
   await run(async () => {
-    const s = await api<Session>("/sessions", "POST");
-    sessions.value.unshift(s);
-    sessionId.value = s.id;
-    messages.value = [];
+    await chat.newSession();
     go("chat");
   });
 }
 function prompt(text: string) {
   draft.value = text;
   go("chat");
-}
-async function send() {
-  if (!draft.value.trim() || sending.value) return;
-  const text = draft.value.trim();
-  error.value = "";
-  sending.value = true;
-  try {
-    if (!sessionId.value) {
-      const s = await api<Session>("/sessions", "POST");
-      sessions.value.unshift(s);
-      sessionId.value = s.id;
-    }
-    messages.value.push({
-      id: "pending-user",
-      role: "user",
-      content: text,
-      status: "pending",
-      citations: [],
-    });
-    messages.value.push({
-      id: "pending-ai",
-      role: "assistant",
-      content: "",
-      status: "pending",
-      citations: [],
-    });
-    draft.value = "";
-    await scroll();
-    await chatStream(
-      sessionId.value,
-      {
-        message: text,
-        topic: topic.value,
-        version: version.value,
-        rewrite: true,
-        compression: true,
-      },
-      (name, data) => {
-        const msg = messages.value[messages.value.length - 1]!;
-        if (name === "delta") msg.content += data.text;
-        if (name === "sources") msg.citations = data;
-        if (name === "done") {
-          messages.value[messages.value.length - 1] = data.message;
-          metrics.value.unshift(data.metrics);
-        }
-        void scroll();
-      },
-    );
-    await refresh();
-    messages.value = await api<Message[]>(
-      `/sessions/${sessionId.value}/messages`,
-    );
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "发送失败";
-    draft.value = text;
-    const last = messages.value[messages.value.length - 1];
-    if (last?.id === "pending-ai") last.status = "failed";
-  } finally {
-    sending.value = false;
-  }
 }
 function submitted(r: Report) {
   reports.value.unshift(r);
@@ -408,7 +397,7 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
         <button
           class="logout-button"
           :disabled="sending || busy"
-          @click="emit('logout')"
+          @click="logout"
         >
           退出登录
         </button>
@@ -420,6 +409,25 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
       aria-label="关闭导航"
       @click="mobileMenu = false"
     ></button>
+    <nav class="bottom-nav" aria-label="主要导航" :inert="modalOpen">
+      <button
+        v-for="id in ['home', 'survey', 'chat', 'courses', 'reports']"
+        :key="id"
+        :class="{ active: page === id }"
+        @click="go(id)"
+      >
+        <component :is="nav.find((n) => n.id === id)?.icon" :size="20" />
+        <span>{{
+          {
+            home: "首页",
+            survey: "问卷",
+            chat: "倾听",
+            courses: "微课堂",
+            reports: "我的",
+          }[id]
+        }}</span>
+      </button>
+    </nav>
     <main :inert="modalOpen">
       <header class="topbar">
         <div class="breadcrumb">
@@ -480,284 +488,23 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
           >
         </div>
 
-        <template v-if="page === 'home'">
-          <div class="home-grid">
-            <section class="welcome-card">
-              <div class="welcome-copy">
-                <span class="tag light">AI 倾听室</span>
-                <h2>有些心事，<br />说出来就轻了一点。</h2>
-                <p>
-                  关于学习、关系，或只是说不清的情绪。<br />这里有一段属于你的时间。
-                </p>
-                <button class="cream-button" @click="go('chat')">
-                  聊一聊此刻的心情<ArrowUpRight :size="18" /></button
-                ><small>AI 提供科普与陪伴，不替代专业咨询。</small>
-              </div>
-              <div class="island-art" aria-hidden="true">
-                <div class="sun-orb"></div>
-                <div class="hill hill-back"></div>
-                <div class="hill hill-front"></div>
-                <div class="art-stem"><i></i><i></i><i></i></div>
-                <span class="art-spark s1">✧</span
-                ><span class="art-spark s2">✧</span>
-              </div>
-            </section>
-            <section class="mood-card">
-              <div class="section-kicker">
-                <span class="tiny-dot"></span>此刻的你
-              </div>
-              <h2>今天，心情是什么天气？</h2>
-              <p>所有感受，都值得被看见。</p>
-              <div class="mood-options">
-                <button
-                  v-for="m in [
-                    { face: '☀', label: '晴朗' },
-                    { face: '◒', label: '平静' },
-                    { face: '☁', label: '低落' },
-                    { face: '☂', label: '烦乱' },
-                  ]"
-                  :key="m.label"
-                  :class="{ selected: mood === m.label }"
-                  @click="mood = m.label"
-                >
-                  <span>{{ m.face }}</span
-                  >{{ m.label }}
-                </button>
-              </div>
-              <div class="mood-note">
-                {{
-                  mood
-                    ? `此刻的天气是「${mood}」。愿意多说一点吗？`
-                    : "不用给心情打分，选一个最接近的就好。"
-                }}
-              </div>
-              <button
-                class="text-button"
-                @click="
-                  prompt(
-                    mood
-                      ? `我今天感觉有些${mood}，想聊一聊。`
-                      : '我想聊聊今天的心情。',
-                  )
-                "
-              >
-                把心情说给我听<ChevronRight :size="16" />
-              </button>
-            </section>
-          </div>
-          <div class="section-header">
-            <h2>用一点时间，靠近自己</h2>
-            <span>从一个小小的行动开始</span>
-          </div>
-          <div class="quick-grid">
-            <button class="quick-card" @click="go('survey')">
-              <span class="feature-icon peach"><ClipboardList /></span>
-              <h3>做一次状态自评</h3>
-              <p>填写机构问卷，整理此刻的感受。</p>
-              <span class="card-link"
-                >选择一份问卷<ArrowUpRight :size="17"
-              /></span></button
-            ><button class="quick-card" @click="go('reports')">
-              <span class="feature-icon lavender"><BarChart3 /></span>
-              <h3>看看自己的变化</h3>
-              <p>留住每一次记录，看见走过的路。</p>
-              <span class="card-link"
-                >{{ reports.length }} 次状态记录<ArrowUpRight :size="17"
-              /></span></button
-            ><button class="quick-card" @click="go('posts')">
-              <span class="feature-icon sage"><Heart /></span>
-              <h3>留下一点心事</h3>
-              <p>不用组织好语言，想到什么就写什么。</p>
-              <span class="card-link"
-                >打开我的树洞<ArrowUpRight :size="17"
-              /></span>
-            </button>
-          </div>
-          <div class="section-header">
-            <h2>给心灵的一堂小课</h2>
-            <button class="text-button" @click="go('courses')">
-              全部课程<ChevronRight :size="16" />
-            </button>
-          </div>
-          <div class="course-grid">
-            <button
-              v-for="(c, i) in courses"
-              :key="c.id"
-              class="course-card"
-              @click="activeCourse = c"
-            >
-              <div :class="['course-art', 'art-' + i]">
-                <span class="course-number">0{{ i + 1 }}</span
-                ><Leaf v-if="i === 0" :size="64" /><Sun
-                  v-else-if="i === 1"
-                  :size="64"
-                /><MessageCircle v-else :size="64" /><span
-                  class="course-category"
-                  >{{ c.category }}</span
-                >
-              </div>
-              <div class="course-body">
-                <h3>{{ c.title }}</h3>
-                <p>{{ c.intro }}</p>
-                <span
-                  ><Clock :size="14" />{{ c.minutes }} 分钟学习
-                  <span v-if="completed.includes(c.id)" class="completed"
-                    >已完成</span
-                  ></span
-                >
-              </div>
-            </button>
-          </div>
-        </template>
+        <HomePanel
+          v-if="page === 'home'"
+          :courses="courses"
+          :completed="completed"
+          :report-count="reports.length"
+          @navigate="go"
+          @prompt="prompt"
+          @course="activeCourse = $event"
+        />
 
-        <template v-else-if="page === 'chat'">
-          <div class="chat-layout">
-            <aside class="conversation-list">
-              <button
-                class="outline-button"
-                :disabled="sending || busy"
-                @click="newSession"
-              >
-                <Plus :size="17" />开始新的对话</button
-              ><span class="nav-label">最近的对话</span
-              ><button
-                v-for="s in sessions"
-                :key="s.id"
-                :disabled="sending"
-                :class="['session-item', { selected: s.id === sessionId }]"
-                @click="run(() => openSession(s.id))"
-              >
-                <MessageCircle :size="16" /><span>{{ s.title }}</span>
-              </button>
-              <p v-if="!sessions.length" class="muted small">
-                你的第一段对话，会从这里开始。
-              </p>
-              <div class="chat-info">
-                <Leaf :size="20" />
-                <p>你可以按自己的节奏说。<br />不需要一次讲完。</p>
-              </div>
-            </aside>
-            <section class="chat-window">
-              <div class="chat-toolbar">
-                <span><span class="online-dot"></span>心屿 · 倾听助手</span>
-                <div class="chat-toolbar-actions">
-                  <button
-                    class="icon-button"
-                    :disabled="sending || busy"
-                    aria-label="新建对话"
-                    @click="newSession"
-                  >
-                    <Plus :size="18" /></button
-                  ><button
-                    class="icon-button"
-                    aria-label="查看知识与检索设置"
-                    @click="showKnowledge = true"
-                  >
-                    <Database :size="18" />
-                  </button>
-                </div>
-              </div>
-              <div class="mobile-session-picker">
-                <label
-                  >历史对话<select
-                    :value="sessionId"
-                    :disabled="sending"
-                    @change="
-                      run(() =>
-                        openSession(($event.target as HTMLSelectElement).value),
-                      )
-                    "
-                  >
-                    <option value="" disabled>选择对话</option>
-                    <option v-for="s in sessions" :key="s.id" :value="s.id">
-                      {{ s.title }}
-                    </option>
-                  </select></label
-                >
-              </div>
-              <div ref="chatBox" class="messages" aria-live="polite">
-                <div v-if="!messages.length" class="chat-empty">
-                  <div class="assistant-emblem"><Leaf :size="32" /></div>
-                  <h2>你好，我在这里。</h2>
-                  <p>此刻有什么想说的吗？<br />一件小事、一点烦恼，都可以。</p>
-                  <div class="starter-prompts">
-                    <button
-                      v-for="q in [
-                        '最近学习压力很大',
-                        '总是担心别人怎么看我',
-                        '睡前脑子停不下来',
-                      ]"
-                      :key="q"
-                      @click="draft = q"
-                    >
-                      {{ q }}<ArrowUpRight :size="15" />
-                    </button>
-                  </div>
-                </div>
-                <div
-                  v-for="m in messages"
-                  :key="m.id"
-                  :class="['message', m.role]"
-                >
-                  <div v-if="m.role === 'assistant'" class="message-avatar">
-                    <Leaf :size="17" />
-                  </div>
-                  <div class="message-body">
-                    <span class="message-name">{{
-                      m.role === "assistant" ? "心屿" : "我"
-                    }}</span>
-                    <div class="bubble">
-                      <span v-if="!m.content && sending" class="thinking"
-                        >正在倾听…</span
-                      >{{ m.content }}
-                    </div>
-                    <div v-if="m.citations?.length" class="citations">
-                      <button
-                        v-for="c in m.citations"
-                        :key="c.id"
-                        @click="activeSource = c"
-                      >
-                        <FileText :size="13" />{{ c.title }}
-                      </button>
-                    </div>
-                    <span v-if="m.status === 'failed'" class="failed-label"
-                      >本轮未完成，不会注入后续上下文</span
-                    >
-                  </div>
-                </div>
-              </div>
-              <form class="composer" @submit.prevent="send">
-                <label class="sr-only" for="chat-draft">想说的话</label
-                ><textarea
-                  id="chat-draft"
-                  v-model="draft"
-                  maxlength="1500"
-                  placeholder="慢慢说，我在听…"
-                  :disabled="sending"
-                  @keydown.enter.exact.prevent="send"
-                ></textarea>
-                <div class="composer-actions">
-                  <span
-                    >{{
-                      health.mode === "demo"
-                        ? "演示回复 · 非真实模型"
-                        : "AI 回复可能有误，请结合实际判断"
-                    }}<small>{{ draft.length }} / 1500</small></span
-                  ><button
-                    class="send-button"
-                    :disabled="sending || !draft.trim()"
-                    aria-label="发送消息"
-                  >
-                    <ArrowUp :size="22" />
-                  </button>
-                </div>
-              </form>
-              <p class="chat-disclaimer">
-                如有即时安全危险，请联系当地急救服务和身边可信任的人。本应用无法提供紧急救援。
-              </p>
-            </section>
-          </div>
-        </template>
+        <ChatPanel
+          v-else-if="page === 'chat'"
+          :chat="chat"
+          :mode="health.mode"
+          @source="activeSource = $event"
+          @knowledge="showKnowledge = true"
+        />
 
         <template v-else-if="page === 'survey'"
           ><SurveyPanel @submitted="submitted"
@@ -927,7 +674,8 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
         activeCourse ||
         activeReport ||
         showSettings ||
-        showKnowledge
+        showKnowledge ||
+        showDiscard
       "
       class="modal-overlay"
       @click.self="
@@ -936,6 +684,7 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
         activeReport = null;
         showSettings = false;
         showKnowledge = false;
+        resolveDiscard(false);
       "
     >
       <section
@@ -951,6 +700,7 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
           activeReport = null;
           showSettings = false;
           showKnowledge = false;
+          resolveDiscard(false);
         "
       >
         <button
@@ -962,12 +712,27 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
             activeReport = null;
             showSettings = false;
             showKnowledge = false;
+            resolveDiscard(false);
           "
         >
           <X />
         </button>
         <p v-if="error" class="modal-error" role="alert">{{ error }}</p>
-        <template v-if="activeSource"
+        <template v-if="showDiscard">
+          <h2>保留这些修改吗？</h2>
+          <p class="reading-text">
+            还有未保存的内容。可以继续编辑并保存，或放弃本次修改后离开。
+          </p>
+          <div class="tenant-toolbar">
+            <button class="outline-button" @click="resolveDiscard(false)">
+              继续编辑
+            </button>
+            <button class="primary-button" @click="resolveDiscard(true)">
+              放弃修改并离开
+            </button>
+          </div>
+        </template>
+        <template v-else-if="activeSource"
           ><span class="eyebrow">知识原文 · {{ activeSource.version }}</span>
           <h2>{{ activeSource.title }}</h2>
           <span class="tag">{{ activeSource.topic }}</span>
@@ -1074,9 +839,11 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
           <div class="setting-row">
             <span>知识检索</span
             ><strong>{{
-              health.retrieval === "qdrant"
-                ? "Qdrant 向量检索"
-                : "本地关键词检索"
+              health.retrievalStrategy === "hybrid-rrf"
+                ? "BM25 + Qdrant · RRF"
+                : health.retrieval === "qdrant"
+                  ? "Qdrant 向量检索"
+                  : "本地 BM25 检索"
             }}</strong>
           </div>
           <p class="reading-text small">
@@ -1170,37 +937,8 @@ const safeUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : undefined);
           >
             <RefreshCw :size="16" />同步向量索引
           </button>
-          <details v-if="latestMetric">
-            <summary>本轮检索与上下文</summary>
-            <div class="diagnostics">
-              <p>改写查询：{{ latestMetric.rewrittenQuery }}</p>
-              <p>
-                检索片段：{{ latestMetric.retrievedCount }} · 首段耗时：{{
-                  latestMetric.firstTokenMs
-                }}
-                ms
-              </p>
-              <p>
-                输入预算估算：{{ latestMetric.contextEstimate }}（UTF-8
-                字节保守估算）
-              </p>
-              <p>
-                模型 Token：{{ latestMetric.promptTokens ?? "未提供" }} 输入 /
-                {{ latestMetric.completionTokens ?? "未提供" }} 输出
-              </p>
-              <p>
-                摘要版本：{{ latestMetric.summaryVersion }} · 覆盖消息序号：{{
-                  latestMetric.coveredThroughSeq
-                }}
-              </p>
-              <p>
-                引用 ID 检查：{{
-                  latestMetric.citationIdsValid ? "通过" : "需复核"
-                }}；语义支持仍需人工核查。
-              </p>
-            </div>
-          </details></template
-        >
+          <RetrievalDiagnostics v-if="latestMetric" :metric="latestMetric"
+        /></template>
       </section>
     </div>
   </div>

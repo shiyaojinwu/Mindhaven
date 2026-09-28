@@ -1,6 +1,6 @@
 package com.mindhaven.application.course;
 
-import com.mindhaven.application.chat.ChatService;
+import com.mindhaven.common.Times;
 import com.mindhaven.domain.model.Models.*;
 import com.mindhaven.domain.port.RecordStore;
 import java.util.*;
@@ -23,7 +23,7 @@ public class LearningService {
 
   public Object complete(String id) {
     store.get("courses", id, Course.class).orElseThrow(() -> new NoSuchElementException("课程不存在"));
-    var p = new Progress(id, ChatService.now());
+    var p = new Progress(id, Times.now());
     store.put("progress", id, p);
     return p;
   }

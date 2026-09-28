@@ -63,21 +63,32 @@ public class AiConfiguration {
       public Result stream(List<Message> m, int max, Consumer<String> emit) {
         StringBuilder text = new StringBuilder();
         ChatResponse[] last = {null};
-        model.stream(prompt(m, max))
-            .timeout(Duration.ofSeconds(45))
-            .doOnNext(
-                response -> {
-                  if (response.getMetadata().getUsage() != null
-                      && response.getMetadata().getUsage().getTotalTokens() > 0) last[0] = response;
-                  if (response.getResult() != null) {
-                    String delta = response.getResult().getOutput().getText();
-                    if (delta != null && !delta.isEmpty()) {
-                      text.append(delta);
-                      emit.accept(delta);
-                    }
+        // Consume chunks on the invoking worker: application callbacks write tenant-scoped
+        // events and must not run on Reactor's HTTP threads with an empty ThreadLocal identity.
+        var deadline =
+            reactor.core.publisher.Mono.delay(Duration.ofSeconds(90))
+                .then(
+                    reactor.core.publisher.Mono.error(
+                        new java.util.concurrent.TimeoutException("Model call deadline exceeded")));
+        try (var responses =
+            model.stream(prompt(m, max))
+                .timeout(Duration.ofSeconds(45))
+                .takeUntilOther(deadline)
+                .toStream(1)) {
+          responses.forEachOrdered(
+              response -> {
+                var usage = response.getMetadata().getUsage();
+                if (usage != null && usage.getTotalTokens() != null && usage.getTotalTokens() > 0)
+                  last[0] = response;
+                if (response.getResult() != null && response.getResult().getOutput() != null) {
+                  String delta = response.getResult().getOutput().getText();
+                  if (delta != null && !delta.isEmpty()) {
+                    text.append(delta);
+                    emit.accept(delta);
                   }
-                })
-            .blockLast(Duration.ofSeconds(90));
+                }
+              });
+        }
         if (text.isEmpty()) throw new IllegalStateException("Model returned no content");
         return result(text.toString(), last[0]);
       }
@@ -99,8 +110,17 @@ public class AiConfiguration {
         if (system.startsWith("REWRITE"))
           text = input.substring(input.lastIndexOf("当前问题：") + 5).trim();
         else if (system.startsWith("SUMMARY")) text = ContextPlanner.clip(input, 1000);
+        else if (system.startsWith("REPORT"))
+          text = "这是一段演示解读，用于验证报告生成与保存。你可以回看自己的回答，记录具体情境和希望得到的支持。这不是临床诊断。";
         else {
-          var matcher = java.util.regex.Pattern.compile("\\[来源:([^]]+)\\]").matcher(system);
+          int referenceEnd = input.indexOf("</reference_documents>");
+          String reference =
+              input.startsWith("<reference_documents>\n") && referenceEnd >= 0
+                  ? input.substring(0, referenceEnd)
+                  : "";
+          var matcher =
+              java.util.regex.Pattern.compile("<document id=\"([A-Za-z0-9-]+)\"")
+                  .matcher(reference);
           if (matcher.find())
             text =
                 "谢谢你愿意把这些感受说出来。我们可以先不急着解决所有事情。\n\n"

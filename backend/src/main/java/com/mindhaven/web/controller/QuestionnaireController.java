@@ -17,6 +17,17 @@ public class QuestionnaireController {
     return service.published();
   }
 
+  @GetMapping("/surveys/{id}/draft")
+  public Object answerDraft(@PathVariable String id, @RequestParam int version) {
+    return service.answerDraft(id, version);
+  }
+
+  @PutMapping("/surveys/{id}/draft")
+  public Object saveAnswers(
+      @PathVariable String id, @RequestBody QuestionnaireService.Submission input) {
+    return service.saveAnswers(id, input);
+  }
+
   @PostMapping("/surveys/{id}/submit")
   public Object submit(
       @PathVariable String id, @RequestBody QuestionnaireService.Submission input) {

@@ -17,12 +17,25 @@ class LayeringTest {
           assertThat(source)
               .as(path)
               .doesNotContain(
-                  "JdbcTemplate", "domain.port.RecordStore", "infrastructure.persistence");
+                  "JdbcTemplate",
+                  "domain.port.RecordStore",
+                  "infrastructure.persistence",
+                  "com.baomidou.",
+                  "org.apache.ibatis.");
         if (path.startsWith("application/"))
           assertThat(source)
               .as(path)
               .doesNotContain(
-                  "com.mindhaven.web.", "com.mindhaven.infrastructure.", "JdbcTemplate");
+                  "com.mindhaven.web.",
+                  "com.mindhaven.infrastructure.",
+                  "JdbcTemplate",
+                  "com.baomidou.",
+                  "org.apache.ibatis.");
+        if (path.startsWith("application/knowledge/"))
+          assertThat(source)
+              .as(path)
+              .doesNotContain(
+                  "org.springframework.ai.vectorstore", "org.springframework.ai.document");
         if (path.startsWith("infrastructure/"))
           assertThat(source)
               .as(path)

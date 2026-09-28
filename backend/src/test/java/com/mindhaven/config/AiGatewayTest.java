@@ -60,7 +60,15 @@ class AiGatewayTest {
               3600);
       AiGateway gateway = new AiConfiguration().liveGateway(settings);
       StringBuilder out = new StringBuilder();
-      var result = gateway.stream(List.of(new UserMessage("你好")), 100, out::append);
+      Thread caller = Thread.currentThread();
+      var result =
+          gateway.stream(
+              List.of(new UserMessage("你好")),
+              100,
+              delta -> {
+                assertThat(Thread.currentThread()).isSameAs(caller);
+                out.append(delta);
+              });
       assertThat(out.toString()).isEqualTo("你好");
       assertThat(result.promptTokens()).isEqualTo(12);
       assertThat(result.completionTokens()).isEqualTo(2);

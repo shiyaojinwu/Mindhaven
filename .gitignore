@@ -12,3 +12,6 @@
 **/*.tsbuildinfo
 
 **/media/
+
+# Native Qdrant process marker
+.qdrant-initialized

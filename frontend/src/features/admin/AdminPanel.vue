@@ -1,13 +1,34 @@
 <script setup lang="ts">
-import CourseAdmin from "./CourseAdmin.vue";
-import { ref, onMounted } from "vue";
-import { api, type SurveyDraft, type Question, type Report } from "./api";
+import {
+  changed,
+  useUnsavedChanges,
+  navigationCheck,
+} from "../../shared/useUnsavedChanges";
+import CourseAdmin from "../courses/CourseAdmin.vue";
+import { ref, onMounted, inject } from "vue";
+import { api, type SurveyDraft, type Question, type Report } from "../../api";
 const list = ref<SurveyDraft[]>([]),
   editing = ref<SurveyDraft | null>(null),
   error = ref(""),
   notice = ref(""),
   busy = ref(false),
   tab = ref("surveys");
+const baseline = ref("");
+const dirty = changed(editing, baseline);
+const leave = useUnsavedChanges(dirty);
+const canLeave = inject(navigationCheck, async () => true);
+async function switchTab(next: string) {
+  if (next === tab.value) return;
+  if (await canLeave()) {
+    editing.value = null;
+    tab.value = next;
+    error.value = "";
+    notice.value = "";
+  }
+}
+async function closeEditor() {
+  if (await leave()) editing.value = null;
+}
 const members = ref<{ id: string; username: string; role: string }[]>([]),
   member = ref({ username: "", password: "" });
 const responses = ref<
@@ -57,12 +78,14 @@ function create() {
     updatedAt: "",
   };
   responses.value = null;
+  baseline.value = JSON.stringify(editing.value);
   error.value = "";
   notice.value = "";
 }
 function edit(d: SurveyDraft) {
   editing.value = JSON.parse(JSON.stringify(d));
   responses.value = null;
+  baseline.value = JSON.stringify(editing.value);
   error.value = "";
   notice.value = "";
 }
@@ -81,6 +104,7 @@ async function persist() {
     d.id ? "PUT" : "POST",
     { ...d, expectedRevision: d.revision },
   );
+  baseline.value = JSON.stringify(editing.value);
   await load();
 }
 async function save() {
@@ -96,6 +120,7 @@ async function publish() {
     editing.value = await api(`/admin/surveys/${d.id}/publish`, "POST", {
       expectedRevision: d.revision,
     });
+    baseline.value = JSON.stringify(editing.value);
     await load();
     notice.value = "问卷已发布，机构成员现在可以填写。";
   });
@@ -129,11 +154,20 @@ async function addMember() {
 <template>
   <div class="tenant-toolbar">
     <div class="tenant-tabs">
-      <button :class="{ active: tab === 'surveys' }" @click="tab = 'surveys'">
+      <button
+        :class="{ active: tab === 'surveys' }"
+        @click="switchTab('surveys')"
+      >
         问卷管理</button
-      ><button :class="{ active: tab === 'members' }" @click="tab = 'members'">
+      ><button
+        :class="{ active: tab === 'members' }"
+        @click="switchTab('members')"
+      >
         成员管理</button
-      ><button :class="{ active: tab === 'courses' }" @click="tab = 'courses'">
+      ><button
+        :class="{ active: tab === 'courses' }"
+        @click="switchTab('courses')"
+      >
         微课堂管理
       </button>
     </div>
@@ -148,10 +182,20 @@ async function addMember() {
   <p v-if="error" class="alert error" role="alert">{{ error }}</p>
   <p v-if="notice" class="alert notice" role="status">{{ notice }}</p>
   <template v-if="tab === 'surveys'"
-    ><form v-if="editing" class="survey-editor" @submit.prevent="save">
+    ><form
+      v-if="editing"
+      class="survey-editor"
+      novalidate
+      @submit.prevent="save"
+    >
       <div class="tenant-toolbar">
-        <h2>{{ editing.id ? "编辑问卷" : "录入新问卷" }}</h2>
-        <button type="button" class="text-button" @click="editing = null">
+        <h2>
+          {{ editing.id ? "编辑问卷" : "录入新问卷" }}
+          <small class="save-indicator">{{
+            !editing.id ? "尚未保存" : dirty ? "有未保存修改" : "已保存"
+          }}</small>
+        </h2>
+        <button type="button" class="text-button" @click="closeEditor">
           返回列表
         </button>
       </div>
@@ -318,7 +362,7 @@ async function addMember() {
               : ""
           }}</span
         >
-        <h3>{{ d.title }}</h3>
+        <h3>{{ d.title || "未命名问卷" }}</h3>
         <p>{{ d.description || "暂无填写说明" }}</p>
         <small class="muted">{{ d.questions.length }} 道题</small>
         <div class="button-row">

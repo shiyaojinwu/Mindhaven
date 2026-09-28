@@ -1,14 +1,17 @@
 package com.mindhaven.application.chat;
 
+import com.mindhaven.application.ai.AiOperations;
+import com.mindhaven.application.ai.RunContext;
 import com.mindhaven.application.knowledge.KnowledgeService;
 import com.mindhaven.config.Settings;
 import com.mindhaven.domain.model.Models;
 import com.mindhaven.domain.model.Models.*;
+import com.mindhaven.domain.model.RetrievalResult;
 import com.mindhaven.domain.port.AiGateway;
+import com.mindhaven.domain.port.PromptRepository;
 import com.mindhaven.domain.port.RecordStore;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -19,27 +22,36 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class ChatService {
   private final RecordStore store;
-  private final AiGateway ai;
+  private final AiOperations ai;
+  private final PromptRepository prompts;
   private final KnowledgeService knowledge;
   private final ContextPlanner planner;
   private final Settings settings;
+  private final CitationVerifier citationVerifier;
+  private final ConversationIntent intents;
   private final TransactionTemplate tx;
-  private final ReentrantLock[] locks = new ReentrantLock[64];
+  private final java.util.concurrent.ConcurrentHashMap<String, Boolean> active =
+      new java.util.concurrent.ConcurrentHashMap<>();
 
   public ChatService(
       RecordStore store,
-      AiGateway ai,
+      AiOperations ai,
+      PromptRepository prompts,
       KnowledgeService knowledge,
       ContextPlanner planner,
       Settings settings,
+      CitationVerifier citationVerifier,
+      ConversationIntent intents,
       PlatformTransactionManager tm) {
     this.store = store;
     this.ai = ai;
+    this.prompts = prompts;
     this.knowledge = knowledge;
     this.planner = planner;
     this.settings = settings;
+    this.citationVerifier = citationVerifier;
+    this.intents = intents;
     this.tx = new TransactionTemplate(tm);
-    Arrays.setAll(locks, i -> new ReentrantLock());
   }
 
   public Session create() {
@@ -99,8 +111,9 @@ public class ChatService {
       context.append("\n").append(m.role()).append(":").append(m.content());
     var result =
         ai.complete(
+            "rewrite",
             List.of(
-                new SystemMessage("REWRITE 将当前问题改写为独立可检索的问题，仅在历史明确支持时补全指代；不要回答，不要添加事实，只输出改写问题。"),
+                new SystemMessage(prompts.get("rewrite").text()),
                 new UserMessage(
                     "历史：" + ContextPlanner.clip(context.toString(), 2400) + "\n当前问题：" + input)),
             200);
@@ -117,12 +130,21 @@ public class ChatService {
             && uncovered.stream().mapToInt(m -> ContextPlanner.estimate(m.content())).sum()
                 <= settings.historyBudget())) return summary;
     List<Models.Message> prefix = new ArrayList<>();
-    int budget = 5200;
+    int budget =
+        settings.contextBudget()
+            - 500
+            - 400
+            - ContextPlanner.estimate(prompts.get("summary").text())
+            - ContextPlanner.estimate(summary == null ? "无" : summary.content());
     for (int i = 0; i + 1 < uncovered.size() - 4; i += 2) {
       var a = uncovered.get(i);
       var b = uncovered.get(i + 1);
       int size = ContextPlanner.estimate(a.content()) + ContextPlanner.estimate(b.content());
-      if (size > budget) break;
+      if (size > budget) {
+        if (prefix.isEmpty())
+          throw new IllegalArgumentException("有一轮对话超过摘要输入预算，请提高上下文预算或开始新的对话；原始记录仍保留");
+        break;
+      }
       prefix.add(a);
       prefix.add(b);
       budget -= size;
@@ -135,20 +157,22 @@ public class ChatService {
     for (var m : prefix) input.append("\n").append(m.role()).append(":").append(m.content());
     String content =
         ai.complete(
+                "summary",
                 List.of(
-                    new SystemMessage(
-                        "SUMMARY"
-                            + " 更新历史摘要，最多250个汉字。保留用户明确陈述的事实、偏好、约束、未解决问题；区分用户事实和助手建议，不做诊断，不把推测变成事实。合并旧摘要与新增轮次，仅输出摘要。"),
+                    new SystemMessage(prompts.get("summary").text()),
                     new UserMessage(input.toString())),
                 500)
             .text();
     if (content.isBlank()) throw new IllegalStateException("Empty summary");
+    if (ContextPlanner.estimate(content) > 1400)
+      throw new IllegalStateException("摘要超出预算，覆盖范围保持不变，请重试");
+    RunContext.check();
     Summary next =
         new Summary(
             id,
             summary == null ? 1 : summary.version() + 1,
             prefix.getLast().seq(),
-            ContextPlanner.clip(content, 1400),
+            content,
             now());
     store.put("summaries", id, next);
     return next;
@@ -162,8 +186,25 @@ public class ChatService {
       boolean rewrite,
       boolean compression,
       BiConsumer<String, Object> event) {
-    var lock = locks[Math.floorMod(id.hashCode(), locks.length)];
-    if (!lock.tryLock()) throw new IllegalArgumentException("上一条回复仍在生成，请稍后再试");
+    turn(id, input, topic, version, rewrite, compression, event, result -> {});
+  }
+
+  public record TurnResult(Models.Message message, Metrics metrics) {}
+
+  /** onCommit stores the runtime completion in the same transaction as the final messages. */
+  public void turn(
+      String id,
+      String input,
+      String topic,
+      String version,
+      boolean rewrite,
+      boolean compression,
+      BiConsumer<String, Object> event,
+      java.util.function.Consumer<TurnResult> onCommit) {
+    var who = com.mindhaven.security.TenantContext.require();
+    String lockKey = who.tenantId() + ":" + who.userId() + ":" + id;
+    if (active.putIfAbsent(lockKey, true) != null)
+      throw new com.mindhaven.common.error.HttpProblem(409, "上一条回复仍在生成，请稍后再试");
     long started = System.nanoTime();
     Models.Message user = null;
     boolean committed = false;
@@ -172,12 +213,22 @@ public class ChatService {
       var all = history(id);
       var complete = all.stream().filter(m -> m.status().equals("complete")).toList();
       Summary summary = store.get("summaries", id, Summary.class).orElse(null);
-      if (compression) summary = compress(id, complete, summary);
+      boolean safety = urgent(input);
+      var intent = intents.decide(input, !complete.isEmpty() || summary != null);
+      RunContext.check();
+      if (compression && !safety) summary = compress(id, complete, summary);
       // Disabling compression also disables summary injection, enabling a clean baseline.
-      if (!compression) summary = null;
-      String query = rewrite ? rewrite(input, complete, summary) : input;
-      var found = urgent(input) ? List.<Citation>of() : knowledge.search(query, topic, version, 4);
-      var plan = planner.plan(complete, summary, input, found, settings);
+      if (!compression || safety) summary = null;
+      String query =
+          rewrite && !safety && intent.retrieve() ? rewrite(input, complete, summary) : input;
+      var retrieval =
+          safety
+              ? new RetrievalResult("safety", List.of(), List.of())
+              : intent.retrieve()
+                  ? knowledge.retrieve(query, topic, version, 4)
+                  : new RetrievalResult(intent.mode(), List.of(), List.of());
+      var found = retrieval.citations();
+      var plan = planner.plan(safety ? List.of() : complete, summary, input, found, settings);
       long seq = all.stream().mapToLong(Models.Message::seq).max().orElse(0) + 1;
       user =
           new Models.Message(
@@ -198,14 +249,8 @@ public class ChatService {
             "听到你这样说，我很在意你现在的安全。你此刻是否处在危险中，或者已经伤害了自己？如果是，请立即联系当地急救服务，并请身边可信任的人陪着你。你不需要独自面对这些。这个应用无法提供紧急救援。";
         delta.accept(help);
         response = new AiGateway.Result(help, null, null);
-      } else response = ai.stream(plan.messages(), settings.outputBudget(), delta);
-      Set<String> ids = new HashSet<>();
-      plan.citations().forEach(c -> ids.add(c.id()));
-      var matcher =
-          java.util.regex.Pattern.compile("\\[([a-zA-Z0-9-]+)\\]").matcher(response.text());
-      boolean valid = true;
-      while (matcher.find()) if (!ids.contains(matcher.group(1))) valid = false;
-      // Identifier validity is not semantic citation support; the latter is reviewed in evaluation.
+      } else response = ai.stream("answer", plan.messages(), settings.outputBudget(), delta);
+      var citationCheck = citationVerifier.verify(answer.toString(), plan.citations());
       var assistant =
           new Models.Message(
               UUID.randomUUID().toString(),
@@ -215,7 +260,8 @@ public class ChatService {
               answer.toString(),
               now(),
               plan.citations(),
-              "complete");
+              "complete",
+              citationCheck);
       var doneUser =
           new Models.Message(
               user.id(), id, seq, "user", input, user.createdAt(), List.of(), "complete");
@@ -225,7 +271,7 @@ public class ChatService {
               id,
               settings.aiMode(),
               settings.aiMode().equals("demo") ? "deterministic-demo" : settings.chatModel(),
-              "rag-v1",
+              prompts.get("answer").hash(),
               version,
               query,
               found.size(),
@@ -237,8 +283,14 @@ public class ChatService {
               (System.nanoTime() - started) / 1_000_000,
               summary == null ? 0 : summary.version(),
               summary == null ? 0 : summary.coveredThroughSeq(),
-              valid,
-              now());
+              citationCheck.passed(),
+              now(),
+              citationCheck,
+              retrieval.mode(),
+              retrieval.matches(),
+              plan.citations().stream().map(Citation::id).toList(),
+              retrieval.configuration());
+      RunContext.check();
       tx.executeWithoutResult(
           status -> {
             store.put("messages:" + id, doneUser.id(), doneUser);
@@ -250,9 +302,11 @@ public class ChatService {
                   id,
                   new Session(
                       id, input.substring(0, Math.min(input.length(), 18)), session.createdAt()));
+            // The runtime's done event and completed messages commit atomically.
+            onCommit.accept(new TurnResult(assistant, metrics));
           });
       committed = true;
-      event.accept("done", Map.of("message", assistant, "metrics", metrics));
+      event.accept("done", new TurnResult(assistant, metrics));
     } catch (RuntimeException e) {
       if (user != null && !committed) {
         var failed =
@@ -269,7 +323,7 @@ public class ChatService {
       }
       throw e;
     } finally {
-      lock.unlock();
+      active.remove(lockKey);
     }
   }
 }

@@ -1,25 +1,38 @@
 package com.mindhaven.application.knowledge;
 
+import com.mindhaven.application.ai.AiOperations;
+import com.mindhaven.config.RetrievalSettings;
 import com.mindhaven.domain.model.Models.*;
+import com.mindhaven.domain.model.RetrievalResult;
+import com.mindhaven.domain.port.KnowledgeVectorIndex;
 import com.mindhaven.domain.port.RecordStore;
 import com.mindhaven.security.TenantContext;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 @Service
 public class KnowledgeService {
   private final RecordStore store;
-  private final ObjectProvider<VectorStore> vectors;
+  private final ObjectProvider<KnowledgeVectorIndex> vectors;
+  private final AiOperations ai;
+  private final LexicalRetriever lexical;
+  private final ReciprocalRankFusion fusion;
+  private final RetrievalSettings settings;
 
-  public KnowledgeService(RecordStore store, ObjectProvider<VectorStore> vectors) {
+  public KnowledgeService(
+      RecordStore store,
+      ObjectProvider<KnowledgeVectorIndex> vectors,
+      AiOperations ai,
+      LexicalRetriever lexical,
+      ReciprocalRankFusion fusion,
+      RetrievalSettings settings) {
     this.store = store;
     this.vectors = vectors;
+    this.ai = ai;
+    this.lexical = lexical;
+    this.fusion = fusion;
+    this.settings = settings;
   }
 
   public List<Knowledge> all() {
@@ -32,38 +45,19 @@ public class KnowledgeService {
         .orElseThrow(() -> new NoSuchElementException("知识片段不存在"));
   }
 
-  private String vectorId(String id) {
-    return UUID.nameUUIDFromBytes(
-            (TenantContext.require().tenantId() + ":" + id).getBytes(StandardCharsets.UTF_8))
-        .toString();
-  }
-
   public synchronized int index() {
-    VectorStore v = vectors.getIfAvailable();
-    if (v == null) throw new IllegalArgumentException("当前为本地关键词检索，无需向量索引");
-    List<Document> docs =
-        all().stream()
-            .map(
-                k ->
-                    Document.builder()
-                        .id(vectorId(k.id()))
-                        .text(k.text())
-                        .metadata(
-                            Map.of(
-                                "tenantId",
-                                TenantContext.require().tenantId(),
-                                "chunkId",
-                                k.id(),
-                                "topic",
-                                k.topic(),
-                                "version",
-                                k.version(),
-                                "title",
-                                k.title()))
-                        .build())
-            .toList();
-    v.add(docs);
-    return docs.size();
+    var vector = vectors.getIfAvailable();
+    if (vector == null) throw new IllegalArgumentException("当前为本地 BM25 检索，无需向量索引");
+    var documents = all();
+    if (documents.isEmpty()) return 0;
+    String tenant = TenantContext.require().tenantId();
+    return ai.embedding(
+        "knowledge-embedding",
+        documents.stream().map(Knowledge::text).collect(java.util.stream.Collectors.joining("\n")),
+        () -> {
+          vector.index(tenant, documents);
+          return documents.size();
+        });
   }
 
   public synchronized Knowledge add(
@@ -75,48 +69,66 @@ public class KnowledgeService {
   }
 
   public List<Citation> search(String query, String topic, String version, int k) {
-    VectorStore v = vectors.getIfAvailable();
-    if (v != null) {
-      var b = new FilterExpressionBuilder();
-      var filter =
-          b.and(b.eq("tenantId", TenantContext.require().tenantId()), b.eq("version", version));
-      if (!topic.equals("全部")) filter = b.and(filter, b.eq("topic", topic));
-      return v
-          .similaritySearch(
-              SearchRequest.builder()
-                  .query(query)
-                  .topK(k)
-                  .similarityThreshold(0.35)
-                  .filterExpression(filter.build())
-                  .build())
-          .stream()
-          .filter(d -> TenantContext.require().tenantId().equals(d.getMetadata().get("tenantId")))
-          .map(
-              d -> {
-                Knowledge source = get(String.valueOf(d.getMetadata().get("chunkId")));
-                return citation(source, d.getScore() == null ? 0 : d.getScore());
-              })
-          .toList();
-    }
-    return all().stream()
-        .filter(x -> x.version().equals(version) && (topic.equals("全部") || topic.equals(x.topic())))
-        .map(x -> citation(x, score(query, x.title() + x.topic() + x.text())))
-        .filter(x -> x.score() > 0)
-        .sorted(Comparator.comparingDouble(Citation::score).reversed())
-        .limit(k)
-        .toList();
+    return retrieve(query, topic, version, k).citations();
   }
 
-  static double score(String query, String document) {
-    Set<String> terms = new HashSet<>();
-    String clean = query.replaceAll("[\\s\\p{Punct}，。？！]", "");
-    for (int i = 0; i < clean.length() - 1; i++) terms.add(clean.substring(i, i + 2));
-    terms.removeAll(
-        Set.of(
-            "什么", "怎么", "如何", "可以", "这个", "那个", "一下", "是什", "为什", "些什", "么办", "情况", "这种", "那我",
-            "先做"));
-    if (terms.isEmpty()) return 0;
-    return terms.stream().filter(document::contains).count() / (double) terms.size();
+  public RetrievalResult retrieve(String query, String topic, String version, int k) {
+    if (k < 1 || k > settings.candidateLimit()) throw new IllegalArgumentException("检索数量超出候选范围");
+    String tenant = TenantContext.require().tenantId();
+    // The canonical store is tenant-scoped. Both channels use the same topic/version boundary.
+    var eligible =
+        all().stream()
+            .filter(
+                x -> version.equals(x.version()) && (topic.equals("全部") || topic.equals(x.topic())))
+            .toList();
+    var vector = vectors.getIfAvailable();
+    String mode =
+        vector == null ? "bm25" : settings.mode().equals("hybrid") ? "hybrid-rrf" : "dense";
+    int candidates = mode.equals("hybrid-rrf") ? settings.candidateLimit() : k;
+    var config =
+        new RetrievalResult.Configuration(candidates, settings.rrfK(), settings.vectorThreshold());
+    if (eligible.isEmpty()) return new RetrievalResult(mode, List.of(), List.of(), config);
+    var keywords =
+        mode.equals("dense") ? List.<Citation>of() : lexical.search(query, eligible, candidates);
+    if (vector == null) return singleChannel("bm25", keywords, config);
+    Map<String, Knowledge> canonical = new HashMap<>();
+    eligible.forEach(d -> canonical.put(d.id(), d));
+    var hits =
+        ai.embedding(
+            "query-embedding",
+            query,
+            () ->
+                vector.search(
+                    tenant, query, topic, version, candidates, settings.vectorThreshold()));
+    Map<String, Citation> unique = new LinkedHashMap<>();
+    for (var hit : hits) {
+      var doc = canonical.get(hit.chunkId());
+      // Drop stale or out-of-scope hits; never copy untrusted vector payload text into context.
+      if (doc != null && Double.isFinite(hit.score()))
+        unique.putIfAbsent(doc.id(), citation(doc, hit.score()));
+    }
+    var dense = unique.values().stream().limit(candidates).toList();
+    if (mode.equals("dense")) return singleChannel(mode, dense, config);
+    var result = fusion.fuse(dense, keywords, settings.rrfK(), k);
+    return new RetrievalResult(mode, result.citations(), result.matches(), config);
+  }
+
+  private RetrievalResult singleChannel(
+      String mode, List<Citation> docs, RetrievalResult.Configuration config) {
+    List<RetrievalResult.Match> matches = new ArrayList<>();
+    for (int i = 0; i < docs.size(); i++) {
+      var c = docs.get(i);
+      boolean dense = mode.equals("dense");
+      matches.add(
+          new RetrievalResult.Match(
+              c.id(),
+              dense ? i + 1 : null,
+              dense ? null : i + 1,
+              dense ? c.score() : null,
+              dense ? null : c.score(),
+              null));
+    }
+    return new RetrievalResult(mode, docs, matches, config);
   }
 
   static Citation citation(Knowledge k, double score) {

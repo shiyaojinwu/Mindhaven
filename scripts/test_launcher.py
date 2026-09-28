@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class LauncherConfigTest(unittest.TestCase):
-    def check(self, config, expected, mode='--vector'):
+    def check(self, config, expected, mode='--vector', native=False, code=0):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copy(ROOT / 'start.sh', root / 'start.sh')
@@ -20,6 +20,10 @@ class LauncherConfigTest(unittest.TestCase):
             bin.mkdir()
             for name in ['npm', 'mvn', 'curl', 'docker', 'ollama']:
                 (bin / name).write_text('#!/bin/sh\nexit 0\n')
+            if native:
+                (bin / 'qdrant').write_text('#!/bin/sh\nexit 0\n')
+                # A native launch must work even when Docker is unavailable.
+                (bin / 'docker').write_text('#!/bin/sh\nexit 127\n')
             (bin / 'lsof').write_text('#!/bin/sh\nexit 1\n')
             (bin / 'java').write_text('#!/bin/sh\necho \'openjdk version "21.0.1"\' >&2\n')
             (bin / 'node').write_text('''#!/usr/bin/env python3
@@ -29,11 +33,11 @@ elif 'crypto' in sys.argv[-1]: print(hashlib.sha256(os.environ['EMBEDDING_MODEL'
 ''')
             for p in bin.iterdir():
                 p.chmod(0o755)
-            env = {k:v for k,v in os.environ.items() if k not in ['EMBEDDING_MODEL','QDRANT_COLLECTION','DEEPSEEK_API_KEY','PORT']}
+            env = {k:v for k,v in os.environ.items() if k not in ['EMBEDDING_MODEL','QDRANT_COLLECTION','QDRANT_RUNTIME','DEEPSEEK_API_KEY','PORT']}
             env.update(PATH=str(bin)+os.pathsep+env['PATH'], JAVA_HOME=str(root))
             result = subprocess.run(['bash',str(root/'start.sh'),mode,'--check'],env=env,text=True,capture_output=True)
-            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-            self.assertIn(expected,result.stdout)
+            self.assertEqual(result.returncode,code,result.stdout+result.stderr)
+            self.assertIn(expected,result.stdout+result.stderr)
             self.assertFalse((root/'.runtime').exists())
 
     def test_default(self):
@@ -50,5 +54,11 @@ elif 'crypto' in sys.argv[-1]: print(hashlib.sha256(os.environ['EMBEDDING_MODEL'
         self.check('DEEPSEEK_API_KEY=fixture-only\n','检查通过：模式 live','--live')
     def test_demo(self):
         self.check('','检查通过：模式 demo','--demo')
+    def test_ai_without_vector(self):
+        self.check('DEEPSEEK_API_KEY=fixture-only\n','检查通过：模式 ai','--ai')
+    def test_native_without_docker(self):
+        self.check('', 'Qdrant 运行方式：native', native=True)
+    def test_invalid_runtime(self):
+        self.check('QDRANT_RUNTIME=unknown\n', 'QDRANT_RUNTIME 只支持', code=1)
 
 if __name__=='__main__': unittest.main()

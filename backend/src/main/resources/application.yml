@@ -19,8 +19,22 @@ spring:
       connection-init-sql: PRAGMA foreign_keys=ON
   sql:
     init:
-      mode: always
+      mode: never
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 0
 mindhaven:
+  tracing:
+    sample-rate: ${TRACE_SAMPLE_RATE:1.0}
+    otlp-endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:}
+  retrieval:
+    mode: ${RAG_RETRIEVAL_MODE:hybrid}
+    candidate-limit: ${RAG_CANDIDATE_LIMIT:20}
+    rrf-k: ${RAG_RRF_K:60}
+    vector-threshold: ${RAG_VECTOR_THRESHOLD:0.35}
+  runtime:
+    deadline-seconds: ${AI_RUN_DEADLINE_SECONDS:180}
+    token-budget: ${AI_RUN_TOKEN_BUDGET:24000}
   media-storage: ${MEDIA_STORAGE:local}
   s3:
     endpoint: ${S3_ENDPOINT:}
@@ -49,5 +63,7 @@ mindhaven:
   history-budget: 4500
   knowledge-budget: 3600
 logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-} spanId=%X{spanId:-}]"
   level:
     root: INFO

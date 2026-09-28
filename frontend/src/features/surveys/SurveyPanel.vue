@@ -1,13 +1,31 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
-import { api, type SurveySnapshot, type Report } from "./api";
+import { ref, onMounted, computed, watch, onBeforeUnmount } from "vue";
+import { api, type SurveySnapshot, type Report } from "../../api";
+import { useUnsavedChanges } from "../../shared/useUnsavedChanges";
 const emit = defineEmits<{ submitted: [Report] }>();
+type Answer = { questionId: string; optionIds: string[]; text: string };
+type Draft = { version: number; answers: Answer[]; updatedAt: string | null };
 const surveys = ref<SurveySnapshot[]>([]),
-  selected = ref<SurveySnapshot | null>(null),
-  error = ref(""),
+  selected = ref<SurveySnapshot | null>(null);
+const error = ref(""),
   busy = ref(false),
-  loading = ref(true);
+  loading = ref(true),
+  draftLoading = ref(false);
+const saving = ref(false),
+  savedAt = ref<string | null>(null),
+  baseline = ref("{}");
 const answers = ref<Record<string, { optionIds: string[]; text: string }>>({});
+const dirty = computed(
+  () => !!selected.value && JSON.stringify(answers.value) !== baseline.value,
+);
+const leave = useUnsavedChanges(dirty);
+let timer: ReturnType<typeof setTimeout> | undefined;
+let pending: Promise<void> = Promise.resolve();
+let generation = 0;
+onBeforeUnmount(() => {
+  clearTimeout(timer);
+  generation++;
+});
 onMounted(async () => {
   try {
     surveys.value = await api("/surveys");
@@ -17,13 +35,81 @@ onMounted(async () => {
     loading.value = false;
   }
 });
-function open(s: SurveySnapshot) {
+async function open(s: SurveySnapshot) {
+  if (!(await leave())) return;
+  const revision = ++generation;
+  clearTimeout(timer);
   selected.value = s;
-  answers.value = Object.fromEntries(
-    s.questions.map((q) => [q.id, { optionIds: [], text: "" }]),
-  );
+  draftLoading.value = true;
   error.value = "";
+  try {
+    const draft = await api<Draft>(
+      `/surveys/${s.surveyId}/draft?version=${s.version}`,
+    );
+    if (revision !== generation) return;
+    answers.value = Object.fromEntries(
+      s.questions.map((q) => {
+        const saved = draft.answers.find((a) => a.questionId === q.id);
+        return [
+          q.id,
+          { optionIds: saved?.optionIds ?? [], text: saved?.text ?? "" },
+        ];
+      }),
+    );
+    baseline.value = JSON.stringify(answers.value);
+    savedAt.value = draft.updatedAt;
+  } catch (e) {
+    error.value = (e as Error).message;
+    selected.value = null;
+  } finally {
+    if (revision === generation) draftLoading.value = false;
+  }
 }
+async function close() {
+  if (await leave()) {
+    clearTimeout(timer);
+    generation++;
+    selected.value = null;
+  }
+}
+function saveDraft() {
+  if (!selected.value || !dirty.value || draftLoading.value) return pending;
+  clearTimeout(timer);
+  const s = selected.value,
+    revision = generation,
+    snapshot = JSON.stringify(answers.value);
+  const payload = Object.entries(JSON.parse(snapshot)).map(
+    ([questionId, a]) => ({ questionId, ...(a as object) }),
+  );
+  saving.value = true;
+  pending = pending.then(async () => {
+    try {
+      const saved = await api<Draft>(`/surveys/${s.surveyId}/draft`, "PUT", {
+        version: s.version,
+        answers: payload,
+      });
+      if (revision === generation) {
+        baseline.value = snapshot;
+        savedAt.value = saved.updatedAt;
+        error.value = "";
+      }
+    } catch (e) {
+      if (revision === generation)
+        error.value = "进度保存失败：" + (e as Error).message;
+    } finally {
+      if (revision === generation) saving.value = false;
+    }
+  });
+  return pending;
+}
+watch(
+  answers,
+  () => {
+    clearTimeout(timer);
+    if (!draftLoading.value && !busy.value) timer = setTimeout(saveDraft, 700);
+  },
+  { deep: true, flush: "sync" },
+);
 function single(q: string, event: Event) {
   answers.value[q].optionIds = [(event.target as HTMLInputElement).value];
 }
@@ -36,10 +122,12 @@ const chosen = computed(
     ).length ?? 0,
 );
 async function submit() {
-  if (!selected.value) return;
+  if (!selected.value || busy.value) return;
   busy.value = true;
   error.value = "";
+  clearTimeout(timer);
   try {
+    await pending;
     const r = await api<Report>(
       `/surveys/${selected.value.surveyId}/submit`,
       "POST",
@@ -51,6 +139,7 @@ async function submit() {
         })),
       },
     );
+    baseline.value = JSON.stringify(answers.value);
     emit("submitted", r);
   } catch (e) {
     error.value = (e as Error).message;
@@ -83,9 +172,10 @@ async function submit() {
       </button>
     </div></template
   >
+  <p v-else-if="draftLoading" role="status">正在恢复填写进度…</p>
   <section v-else class="survey-layout">
     <aside class="survey-intro">
-      <button class="text-button" @click="selected = null">← 全部问卷</button>
+      <button class="text-button" @click="close">← 全部问卷</button>
       <h2>{{ selected.title }}</h2>
       <p>{{ selected.description }}</p>
       <span class="tag">版本 v{{ selected.version }}</span>
@@ -98,12 +188,35 @@ async function submit() {
           ></i>
         </div>
       </div>
+      <p class="save-indicator" role="status">
+        {{
+          saving
+            ? "正在保存进度…"
+            : dirty
+              ? "有未保存的回答"
+              : savedAt
+                ? "填写进度已保存"
+                : "填写后自动保存进度"
+        }}
+      </p>
+      <button
+        type="button"
+        class="text-button"
+        :disabled="!dirty || saving || busy"
+        @click="saveDraft"
+      >
+        保存进度
+      </button>
       <p class="survey-disclosure">
         答卷会提供给本机构管理员查看。<br />分数是自定义选项的加总，不代表临床诊断。
       </p>
     </aside>
     <form class="question-list" @submit.prevent="submit">
-      <fieldset v-for="(q, i) in selected.questions" :key="q.id">
+      <fieldset
+        v-for="(q, i) in selected.questions"
+        :key="q.id"
+        :disabled="busy"
+      >
         <legend>
           <span>{{ i + 1 }}</span
           >{{ q.title }}
@@ -136,6 +249,7 @@ async function submit() {
               v-if="q.type === 'SINGLE'"
               type="radio"
               :name="q.id"
+              :checked="answers[q.id].optionIds.includes(o.id)"
               :value="o.id"
               :required="q.required"
               @change="single(q.id, $event)"

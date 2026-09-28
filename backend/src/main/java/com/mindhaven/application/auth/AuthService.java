@@ -1,7 +1,7 @@
 package com.mindhaven.application.auth;
 
-import com.mindhaven.application.chat.ChatService;
 import com.mindhaven.application.questionnaire.QuestionnaireService;
+import com.mindhaven.common.Times;
 import com.mindhaven.common.error.HttpProblem;
 import com.mindhaven.domain.port.AuthRepository;
 import com.mindhaven.domain.port.RecordStore;
@@ -89,7 +89,7 @@ public class AuthService {
   public Login register(String slug, String name, String username, String password) {
     String tenant = UUID.randomUUID().toString(),
         user = UUID.randomUUID().toString(),
-        now = ChatService.now();
+        now = Times.now();
     repository.createTenant(tenant, slug, name, now);
     repository.createUser(user, tenant, username, passwordHash(password), "ADMIN", now);
     var identity = new TenantContext.Identity(tenant, slug, name, user, username, "ADMIN");
@@ -132,7 +132,7 @@ public class AuthService {
         username,
         passwordHash(password),
         "MEMBER",
-        ChatService.now());
+        Times.now());
     return Map.of("id", id, "username", username, "role", "MEMBER");
   }
 }

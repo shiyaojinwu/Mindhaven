@@ -1,7 +1,7 @@
 package com.mindhaven.application.community;
 
-import com.mindhaven.application.chat.ChatService;
 import com.mindhaven.application.dto.PostInput;
+import com.mindhaven.common.Times;
 import com.mindhaven.domain.model.Models.*;
 import com.mindhaven.domain.port.RecordStore;
 import java.util.*;
@@ -19,8 +19,7 @@ public class PostService {
   }
 
   public Object post(PostInput input) {
-    var p =
-        new Post(UUID.randomUUID().toString(), input.content(), input.mood(), 0, ChatService.now());
+    var p = new Post(UUID.randomUUID().toString(), input.content(), input.mood(), 0, Times.now());
     store.put("posts", p.id(), p);
     return p;
   }
@@ -32,7 +31,7 @@ public class PostService {
     if (store.get("hugs", marker, Progress.class).isPresent()) return p;
     var next = new Post(id, p.content(), p.mood(), p.hugs() + 1, p.createdAt());
     store.put("posts", id, next);
-    store.put("hugs", marker, new Progress(marker, ChatService.now()));
+    store.put("hugs", marker, new Progress(marker, Times.now()));
     return next;
   }
 

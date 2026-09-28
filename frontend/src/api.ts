@@ -7,12 +7,26 @@ export interface Citation {
   text: string;
   score: number;
 }
+export interface CitationCheck {
+  status: "VALID" | "MISSING" | "INVALID" | "NOT_REQUIRED";
+  citedIds: string[];
+  invalidIds: string[];
+}
+export interface RetrievalMatch {
+  chunkId: string;
+  vectorRank: number | null;
+  lexicalRank: number | null;
+  vectorScore: number | null;
+  lexicalScore: number | null;
+  rrfScore: number | null;
+}
 export interface Message {
   id: string;
   role: string;
   content: string;
   status: string;
   citations: Citation[];
+  citationCheck?: CitationCheck | null;
 }
 export interface Session {
   id: string;
@@ -67,6 +81,15 @@ export interface Metric {
   summaryVersion: number;
   coveredThroughSeq: number;
   citationIdsValid: boolean;
+  citationCheck?: CitationCheck | null;
+  retrievalMode?: string | null;
+  retrievalMatches?: RetrievalMatch[] | null;
+  contextIds?: string[] | null;
+  retrievalConfig?: {
+    candidateLimit: number;
+    rrfK: number;
+    vectorThreshold: number;
+  } | null;
 }
 export class ApiError extends Error {
   constructor(
@@ -97,59 +120,6 @@ export async function api<T>(
     ? (undefined as T)
     : res.json();
 }
-export async function chatStream(
-  id: string,
-  body: unknown,
-  event: (name: string, data: any) => void,
-) {
-  const res = await fetch(`/api/sessions/${id}/chat`, {
-    method: "POST",
-    signal: AbortSignal.timeout(180000),
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    if (res.status === 401)
-      window.dispatchEvent(new Event("mindhaven:session-expired"));
-    const error = await res.json().catch(() => ({ message: "对话连接失败" }));
-    throw new ApiError(res.status, error.message);
-  }
-  if (!res.body) throw new Error("浏览器不支持流式响应");
-  const reader = res.body.getReader(),
-    decoder = new TextDecoder();
-  let buffer = "",
-    doneEvent = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replace(/\r\n/g, "\n");
-      let end;
-      while ((end = buffer.indexOf("\n\n")) >= 0) {
-        const block = buffer.slice(0, end);
-        buffer = buffer.slice(end + 2);
-        let name = "message";
-        const lines: string[] = [];
-        for (const line of block.split("\n")) {
-          if (line.startsWith("event:")) name = line.slice(6).trim();
-          if (line.startsWith("data:")) lines.push(line.slice(5).trimStart());
-        }
-        if (lines.length) {
-          const data = JSON.parse(lines.join("\n"));
-          if (name === "error") throw new Error(data.message);
-          if (name === "done") doneEvent = true;
-          event(name, data);
-        }
-      }
-      if (done) break;
-    }
-    if (!doneEvent) throw new Error("连接中断，回复未完成，请重试");
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-}
-
 export interface Identity {
   tenantId: string;
   tenantSlug: string;
