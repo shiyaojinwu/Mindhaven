@@ -58,9 +58,15 @@ mindhaven:
   qdrant-host: ${QDRANT_HOST:localhost}
   qdrant-port: ${QDRANT_PORT:6334}
   qdrant-collection: ${QDRANT_COLLECTION:mindhaven_embeddinggemma_v1}
-  context-budget: 12000
+  # Configure the effective context window supported by your model/gateway.
+  context-budget: ${MODEL_CONTEXT_WINDOW:12000}
+  context:
+    compression-enabled: ${CONTEXT_COMPRESSION_ENABLED:true}
+    compression-threshold: ${CONTEXT_COMPRESSION_THRESHOLD:0.8}
+    keep-recent-turns: ${CONTEXT_KEEP_RECENT_TURNS:3}
+    max-compression-passes: ${CONTEXT_MAX_COMPRESSION_PASSES:4}
+    max-input-characters: ${CHAT_MAX_INPUT_CHARACTERS:1500}
   output-budget: 1400
-  history-budget: 4500
   knowledge-budget: 3600
 logging:
   pattern:

@@ -202,7 +202,6 @@ export function useChat() {
         topic: topic.value,
         version: version.value,
         rewrite: true,
-        compression: true,
       };
       if (
         !pending ||

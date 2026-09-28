@@ -15,3 +15,13 @@
 
 # Native Qdrant process marker
 .qdrant-initialized
+
+# IDE and local evaluation outputs
+**/.idea/
+*.iml
+.DS_Store
+/eval/*.json
+!/eval/cases.json
+
+# Local development notes (not project documentation)
+/docs/code-style.md

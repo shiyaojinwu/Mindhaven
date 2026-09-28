@@ -172,7 +172,7 @@ fi
 printf '安装前端依赖…\n'
 (cd "$ROOT/frontend" && env -u DEEPSEEK_API_KEY npm ci --no-audit --no-fund)
 printf '构建后端…\n'
-MVN_ARGS=(-s "$ROOT/backend/maven-settings.xml" -q -DskipTests package)
+MVN_ARGS=(-q -DskipTests package)
 # Optional cache directory, useful in restricted development environments.
 if [[ -n "${MAVEN_REPO_LOCAL:-}" ]]; then MVN_ARGS+=("-Dmaven.repo.local=$MAVEN_REPO_LOCAL"); fi
 (cd "$ROOT/backend" && env -u DEEPSEEK_API_KEY mvn "${MVN_ARGS[@]}")

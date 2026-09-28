@@ -18,7 +18,6 @@ export interface ChatCommand {
   topic: string;
   version: string;
   rewrite: boolean;
-  compression: boolean;
   requestId: string;
 }
 export type RunEvent =

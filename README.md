@@ -24,7 +24,7 @@ macOS 可以直接双击项目根目录的 `start.command`。脚本会寻找本�
 ./start.sh --live    # 混合检索 + 真实模型，密钥可在终端隐藏输入
 ```
 
-脚本会执行 `npm ci`、构建后端、按顺序启动前后端并检查就绪。日志写入 `.runtime/run-日期-进程号/`。Ctrl+C 清理本次启动的应用进程；不结束其他程序。端口 8080 或 5173 被占用时明确报错，不自动改端口。原 `scripts/dev.sh` 保留为兼容入口，接受相同参数。
+脚本会执行 `npm ci`、构建后端、按顺序启动前后端并检查就绪。日志写入 `.runtime/run-日期-进程号/`。Ctrl+C 清理本次启动的应用进程；不结束其他程序。端口 8080 或 5173 被占用时明确报错，不自动改端口。
 
 使用真实模型但暂不启用向量检索时，运行 `./start.sh --ai`。兼容网关通过 `DEEPSEEK_BASE_URL`、`DEEPSEEK_CHAT_PATH`、`DEEPSEEK_MODEL` 配置，最终地址是 base URL 与 path 拼接。密钥可通过环境变量或 `.env` 提供；交互启动未配置密钥时会隐藏输入，仅在本次进程中使用。
 
@@ -35,7 +35,7 @@ macOS 可以直接双击项目根目录的 `start.command`。脚本会寻找本�
 ```bash
 # 终端 1
 cd backend
-mvn -s maven-settings.xml test package
+mvn clean package
 java -jar target/mindhaven-0.1.0.jar
 
 # 终端 2
@@ -44,7 +44,7 @@ npm ci
 npm run dev
 ```
 
-`maven-settings.xml` 只配置公开 Maven Central，避免继承开发机器的公司镜像。前端依赖由 package-lock.json 固定。构建中的 JAR 不应同时作为运行中的 JAR 被覆盖；开发脚本会创建独立运行副本。
+Maven 使用本机默认配置（`~/.m2/settings.xml`）；IDEA 中将 `backend/pom.xml` 导入为 Maven 项目，选择 JDK 21。前端依赖由 package-lock.json 固定。构建中的 JAR 不应同时作为运行中的 JAR 被覆盖；开发脚本会创建独立运行副本。
 
 ## 首次使用与问卷录入
 
@@ -92,7 +92,7 @@ VIDEO_REQUEST_MAX_SIZE=520MB
 
 租户身份来自数据库中的登录会话，不接受 `X-Tenant-Id` 等请求头切换身份。会话 Cookie 为 HttpOnly、SameSite=Strict，8 小时有效；数据库仅保存令牌 SHA-256。密码使用独立盐和 PBKDF2 哈希。生产 HTTPS 可设 `MINDHAVEN_SECURE_COOKIE=true`，且需另行配置可信域名、反向代理、限流、密码恢复、备份和审计等。
 
-数据库由 Flyway 管理迁移，首次升级会保留已有业务记录。SQLite 包含 `tenants`、`tenant_users`、`auth_sessions`、`tenant_records`。租户共享数据使用空 owner_id，个人数据使用实际 user_id；每次查询、更新和删除都带 tenant_id/owner_id。旧单用户 `records` 表保留原样，**不会自动导入新机构**；目前不提供旧数据归属迁移工具。
+数据库由 Flyway 管理迁移，首次升级会保留已有业务记录。SQLite 包含账号认证表、`chat_session`、`chat_message`、`knowledge_chunk` 和其余模块使用的 `tenant_records`。知识按 tenant_id 隔离，会话和消息额外按 owner_id 隔离；通用表中的租户共享数据使用空 owner_id，个人数据使用实际 user_id。旧单用户 `records` 表保留原样，**不会自动导入新机构**；目前不提供旧数据归属迁移工具。
 
 Qdrant 索引 ID 包含租户命名空间，payload 包含 tenantId，检索强制 tenantId + 知识版本过滤；返回结果再次核对 tenantId。老索引没有 tenantId，不会被新查询命中，管理员需要重新同步本机构索引。
 
@@ -103,12 +103,27 @@ Qdrant 索引 ID 包含租户命名空间，payload 包含 tenantId，检索强�
 - RAG：主题/版本过滤、历史指代重写、来源 ID 引用；支持本地 BM25，以及 BM25 + Qdrant 向量召回的应用层 RRF 融合。
 - 上下文：预留输出预算，按完整 user/assistant 轮次保留最近历史，增量摘要和覆盖消息序号，已覆盖消息不重复注入。
 - 心理自评：动态问卷录入、草稿/发布/停用、版本快照、三类题型、服务端校验与计分、管理员查看答卷；内置 5 题示例。
-- AI 运行：独立记录回答、改写、摘要、报告与向量化用量；提示词文件化并记录内容哈希，任务有总时限与保守 Token 预算。详见 [运行架构](docs/runtime.md)。
+- AI 运行：独立记录回答、改写、摘要、报告与向量化用量；提示词文件化并记录内容哈希，任务有总时限与保守 Token 预算。
 - 报告：规则解读；真实 AI 模式可生成额外解读并保存，演示模式明确显示固定演示解读。
 - 微课堂：机构管理员配置标题、分类、预计阅读分钟、简介和纯文本正文；草稿、发布、停用及学习完成记录，内置 3 篇示例可继续编辑。
 - 树洞：私人内容保存、每条一次自我拥抱、删除；不是公开交流社区。
 - 知识管理：逐片段录入、独立版本、手动同步 Qdrant 索引。
-- 评测：固定样例、4 组重写/压缩开关组合、Recall@4、首段耗时、上下文估算、最终回答调用的 Token usage、摘要及人工复核字段。
+- 评测：固定样例、两组查询重写对照；压缩由服务端配置，分别启动启用/禁用实例可做四组对照、Recall@4、首段耗时、上下文估算、最终回答调用的 Token usage、摘要及人工复核字段。
+
+## 任务协议与运行边界
+
+| 接口 | 行为 |
+| --- | --- |
+| `POST /api/sessions/{id}/runs` | 提交消息和 `requestId`；同一租户、用户、会话下重复请求返回原任务，标识相同但内容不同返回 409 |
+| `GET /api/runs/{id}/events?after={seq}` | 按递增序号回放持久化事件，断线后从上次序号恢复 |
+| `POST /api/runs/{id}/cancel` | 标记取消并尝试中断执行，保留已写入的部分回复；仅断开网络不会取消任务 |
+| `GET /api/usage?runId=...` | 查询本人任务各阶段的模型、耗时、状态及实际或估算用量 |
+
+完整消息、指标、`done` 事件和任务完成状态在同一事务提交；失败轮次不进入后续上下文。每个账号最多一个活动聊天任务，线程池和队列均有界。`AI_RUN_DEADLINE_SECONDS` 默认 180 秒，包含排队；`AI_RUN_TOKEN_BUDGET` 默认 24000，累计预留各阶段估算输入和最大输出，不代表账单用量。
+
+**当前只支持一个应用进程对应一个数据库。** 启动恢复会将遗留活动任务标为 `INTERRUPTED`，保留记录，不自动重放模型调用。多副本运行需要补充任务租约与节点认领；取消外部调用是尽力而为，已产生的费用不会撤销。
+
+报告分析为同步接口，同一用户对同一报告并发分析返回 409，其他报告最多并发四份；缓存根据报告事实、模型、模式和提示词哈希失效。尚未提供货币费用换算、每日租户额度、分布式限流、生产告警或 MCP 外部工具执行。
 
 ## 模型与检索模式
 
@@ -150,20 +165,22 @@ Apple 芯片 Mac 可在项目内安装固定版本的 Qdrant 与 Ollama 官方�
 
 然后在聊天页面打开「知识与检索设置」，点击「同步向量索引」。该操作会调用 Embedding 服务。原文存在 SQLite，Qdrant 保存片段内容、向量和过滤元数据，引用快照随每条回答保存。
 
+默认 `EMBEDDING_MODEL=embeddinggemma`。未指定 `QDRANT_COLLECTION` 时，脚本为默认模型选择 `mindhaven_embeddinggemma_v1`，为旧 `bge-m3` 选择原集合名，其他模型按名称哈希生成集合名。手动启动后端时默认也是 EmbeddingGemma 集合；切换模型需手动指定新集合。已有 `.env` 中的显式模型和集合配置优先，不会被脚本改写。相同模型名的权重版本升级也需指定新集合、重新同步索引。
+
 查看向量数据：打开 [Qdrant 控制台](http://127.0.0.1:6333/dashboard)，进入 **Collections → mindhaven_embeddinggemma_v1**。Points 显示片段及租户、主题、版本等元数据，Info 显示维度和距离算法。Apple 芯片 Mac 安装脚本会同时安装官方 Web UI；已有原生安装需重新运行该脚本，再重启服务以加载控制台。
 
 Qdrant 就绪后会持续运行以处理检索请求，终端保持运行是正常状态。当前采用前台启动脚本管理本次启动的进程，按 Ctrl+C 停止；电脑重启后需重新运行 `./start.sh --live`。日志位于本次启动打印的目录，其中 `qdrant.log` 是原生向量库日志。
 
-真实模式启动与问答会访问配置的外部服务，并可能产生费用；本地演示不访问这些服务。不使用或保存聊天中曾提供的 GitHub 令牌。
+真实模式启动与问答会访问配置的外部服务，并可能产生费用；本地演示不访问这些服务。
 
 ## 数据库可插拔边界
 
-普通业务数据通过 MyBatis-Plus 访问数据库。`domain/port` 保留仓储接口，`infrastructure/persistence` 下分为 `entity`（表映射）、`mapper`（CRUD 与自定义 SQL）、`repository`（仓储实现）；业务服务不依赖 Mapper 或 SQLite API。
+普通业务数据通过 MyBatis-Plus 访问数据库。采用 `Controller → Service → Manager → Mapper`：Service 负责业务编排，具体 Manager 封装租户条件与存储操作，Mapper 承担 MyBatis-Plus CRUD 和自定义 SQL。顶层 `manager`、`mapper` 与 `model/entity` 分别归属数据访问、SQL 和表映射，不再为数据库访问额外定义 Repository 接口。`integration` 按 AI、向量检索和媒体存储组织接口与实现。
 
-保留既有表结构和数据：通用业务记录使用 tenant_id/owner_id/bucket/id 复合主键 JSON 表，账号、认证会话、AI 任务、事件和用量使用独立表。复合主键记录使用完整键条件和原子 upsert，任务事件使用事务内 `UPDATE ... RETURNING` 分配序号。租户与用户条件由仓储显式限定，未启用自动租户插件；身份查询和启动恢复有各自的访问边界。Flyway 继续管理迁移，Qdrant 不经过 MyBatis-Plus。
+会话、消息、知识使用独立业务表和对应 SessionManager、MessageManager、KnowledgeManager；消息引用和引用检查结果作为 JSON 快照保存。V3 Java 迁移将 tenant_records 中的这些记录复制到新表，保留原始记录作为升级备份，后续读写只走新表。知识 ID 不变，无需因本次表迁移重建 Qdrant 索引。课程、问卷等其余模块仍使用通用 JSON 表，后续可逐步迁移；账号、认证会话、AI 任务、事件和用量已使用独立表。复合主键记录使用完整键条件和原子 upsert，任务事件使用事务内 `UPDATE ... RETURNING` 分配序号。租户与用户条件由 Manager 显式限定，未启用自动租户插件；身份查询和启动恢复有各自的访问边界。Flyway 继续管理迁移，Qdrant 不经过 MyBatis-Plus。
 
 - SQLite：默认 `backend/mindhaven.db`（按后端工作目录）；单连接池避免本地竞争。
-- PostgreSQL：提供 `application-postgres.yml` 和驱动，使用同一 MyBatis-Plus 持久化层及兼容 DDL。**本次没有运行 PostgreSQL 实例验证。**
+- PostgreSQL：提供 `application-postgres.yml` 和驱动，使用同一 MyBatis-Plus 持久化层及兼容 DDL。**PostgreSQL 适配尚未经实例集成测试验证。**
 - MySQL：尚未提供已验证适配，需要驱动、建表方言与集成测试；不能仅换 URL 就宣称兼容。
 
 ```bash
@@ -172,6 +189,8 @@ DB_URL=jdbc:postgresql://localhost:5432/mindhaven \
 DB_USER=mindhaven DB_PASSWORD='your-local-password' \
 java -jar backend/target/mindhaven-0.1.0.jar
 ```
+
+Flyway V1 接管原表，V2 增加任务、事件和用量表，已有数据库以版本 0 建立基线；V3 复制会话、消息和知识记录，遇到无效数据会失败并回滚。升级前请备份数据库和媒体目录，迁移后不能直接用旧版本继续写入旧表。
 
 切换数据库不会自动迁移旧数据。当前 JSON 存储适合本地小规模数据；需要复杂统计、大规模并发写入时，应增加规范化表及更完整的事务/并发契约测试。会话锁和问卷编辑锁只在当前 JVM 内有效。问卷 revision 检查与事务用于单实例冲突保护；多实例部署还需数据库级 CAS/行锁及任务租约。
 
@@ -188,14 +207,24 @@ java -jar backend/target/mindhaven-0.1.0.jar
 
 每篇文档按 `Σ 1/(k + 该通道名次)` 得分，保留前 4 篇，再由上下文预算决定实际注入的片段。融合分数不是相似度或可信度。BM25 使用中文字符二元组及英文词项，查询时读取本机构的小型知识库；没有接入 Qdrant 稀疏向量索引或中文分词器。大规模语料需替换该全文扫描实现，并用固定评测集验证召回。向量服务故障会明确报错，不静默切换检索方式。
 
+引用原文从业务数据库读取，Qdrant payload 不作为权威原文；返回片段再次核对租户、主题及版本。新增知识尚未同步时可能仅由 BM25 命中。数据库与 Qdrant 索引同步不是分布式事务，失败后需重试。
+
 回答完成后保存引用检查结果。有效的 `[片段ID]` 显示为可点击的来源编号；“参考来源”可展开核对原文。聊天区仅展示实际引用的来源；未标注来源记录在诊断面板，不能仅凭这一点认定漏引。引用未知 ID 仍提示核查；旧记录不补造校验结果。检查只能确认编号及是否缺失，不能证明每条结论有原文支持，也不会自动补造引用或额外调用模型修复。
 
 “本轮检索与上下文”展示向量/BM25 排名、RRF 得分、实际注入范围及配置快照，方便回查。
 
 ## 上下文与评测口径
 
+提示词保存在 `backend/src/main/resources/prompts`，分别用于回答、改写、摘要和报告；调用记录保存内容的 SHA-256。`ConversationContextService` 管理自动压缩，`ContextPlanner` 控制上下文预算，`ContextRenderer` 格式化消息，Spring AI 负责 JSON 序列化：
+
+```text
+system 规则 → 可选摘要参考消息 → 摘要未覆盖的 user/assistant 完整轮次 → 当前 user 消息
+```
+
+有检索资料时，当前 user 消息包含 `reference_documents`（片段 ID、版本、标题、来源和正文）及 `current_question`；无资料时直接使用用户原话。摘要和资料不作为系统规则，标签及属性内容经过转义，预算按最终渲染文本估算。分区标签有助于区分内容，但不能保证防住提示词注入。
+
 - 完整消息记录和模型上下文分开。发送失败的 user 消息保留 `failed` 状态，不注入后续上下文。
-- 每个会话使用单调 seq；摘要保存 `version` 和 `coveredThroughSeq`。摘要只处理新增的完整轮次，近期至少保留两轮作为压缩时的保护范围；最终输入仍受总预算约束。
+- 每个会话使用单调 seq；摘要保存 `version` 和 `coveredThroughSeq`。按完整候选上下文估算触发自动压缩，阈值为 min(模型配置窗口 × 80%，窗口 − 输出预留 − 200)。触发后压缩早期完整轮次，保留最近三轮及当前问题；不会为满足预算静默截断这些轮次。摘要未覆盖的消息从数据库增量查询，消息序号独立取数据库最大值。压缩失败不更新摘要，检索资料可按优先级缩减，仍超限则明确提示。
 - 输入预算采用 **UTF-8 字节数 + 消息余量** 的保守估算，不是 DeepSeek tokenizer 的精确 Token 数，不能作为计费依据。
 - 摘要输入空间由上下文预算动态分配；完整轮次仍超限时明确报错，保留原文及摘要覆盖范围。真实模型摘要的事实保留率需单独人工或模型裁判核验。
 - `firstTokenMs`：从本轮服务处理开始到第一段非空回答的耗时，包含重写、摘要和检索，不包含客户端到服务端网络耗时。
@@ -211,22 +240,23 @@ python3 scripts/evaluate.py --base http://127.0.0.1:8080 --output eval/latest.js
 
 如需复用预先创建的评测机构，可通过环境变量 `EVAL_TENANT`、`EVAL_USERNAME`、`EVAL_PASSWORD` 提供账号；脚本不会将凭证写入结果文件。Qdrant 模式下，新建的评测机构会先同步自己的向量索引；复用已有机构时须显式加 `--index`，避免意外修改已有索引。
 
-固定集包含口语表达、多轮指代、长对话、知识缺失、主题和版本过滤。`factRetentionReview` 和 `citationSupportReview` 默认 null，留给实际人工复核，不能把未评测记为通过。`eval/demo-results.json` 是本地演示模式的链路验证记录，不是模型质量或性能结论。
+固定集包含口语表达、多轮指代、长对话、知识缺失、主题和版本过滤。`factRetentionReview` 和 `citationSupportReview` 默认 null，留给实际人工复核，不能把未评测记为通过。评测结果由脚本生成到本地，不纳入版本控制；演示模式结果不代表真实模型质量或性能。
 
 ## 验证与目录
 
 ```bash
-cd backend && mvn -s maven-settings.xml test
+cd backend && mvn test
 cd ../frontend && npm ci && npm run build
 ```
 
 - `backend/src/main/java/com/mindhaven/`：业务、接口和模型适配。
 - `backend/src/test/java/com/mindhaven/`：SQLite 集成、预算/摘要/断线回归、Spring AI 本地 SSE 模拟服务测试。
 - `frontend/src/`：Vue 页面、SSE 客户端、响应式样式。
-- `eval/`：固定样例和演示结果。
-- `VALIDATION.md`：实际完成的验证及未验证边界。
+- `eval/cases.json`：固定评测用例。
+- `scripts/`：本地依赖安装、Jaeger 启动与评测脚本。
+- `config/jaeger-local.yml`：本地追踪控制台配置。
 
-本实现参考用户指定的 `powertoredstar/Mindhaven` 后端快照 `078c6c8fd08631a84fb3f5a9b0e7f912d8f6c602` 的业务范围，重新组织为独立前后端。没有复制旧仓库的部署配置或凭证，没有向远端提交。
+业务范围参考 `powertoredstar/Mindhaven` 后端快照 `078c6c8fd08631a84fb3f5a9b0e7f912d8f6c602` 的业务范围，重新组织为独立前后端。没有复制旧仓库的部署配置或凭证。
 
 ## 可配置对象存储
 
@@ -261,7 +291,7 @@ S3_PATH_STYLE=true
 | 视频元数据与课程引用 | 同一 SQLite | 视频二进制不写数据库 |
 | 视频文件 | 本地 `backend/media` 或配置的 S3 Bucket | 独立于数据库，必须保留对应存储 |
 | 知识片段 | SQLite | 本地模式采用 BM25 检索 |
-| 向量索引（开启 Qdrant 时） | Qdrant 的 Docker 命名卷 | 需保留或重建；真实环境尚未验收 |
+| 向量索引（开启 Qdrant 时） | 原生 `.data/qdrant` 或 Docker 命名卷 | 需备份或从知识原文重建 |
 
 默认一键启动重启不会清除这些数据。问卷填写进度自动保存；聊天尚未发送的输入、上传进度、视频当前播放秒数等不持久化。SQLite/JDBC 数据源由 `DB_URL` 配置；PostgreSQL profile 已提供但未实库验收，不代表任意数据库无需适配。
 
@@ -272,41 +302,65 @@ S3_PATH_STYLE=true
 ```text
 com.mindhaven/
 ├── Application.java             # Spring Boot 入口
-├── web/controller/              # 按聊天、知识、课程、视频、问卷、报告、树洞划分 HTTP 接口
-├── web/stream/                  # 持久化事件的 SSE 订阅与回放
-├── web/error/                   # 统一 HTTP 异常响应
-├── application/                 # 用例与业务流程
-│   ├── auth/                    # 账号、会话、机构初始化
-│   ├── chat/                    # 对话、重写、摘要、上下文预算
-│   ├── ai/                      # 持久化任务、取消、预算与阶段用量
-│   ├── knowledge/               # 知识录入、检索与索引编排
-│   ├── course/                  # 草稿发布、学习记录、视频校验与访问控制
-│   ├── questionnaire/           # 问卷发布、计分与答卷快照
-│   ├── report/                  # 报告解读与结果复用
-│   ├── community/               # 个人树洞记录
-│   └── dto/                     # 用例输入与输出
-├── domain/model/                # 业务数据记录
-├── domain/port/                 # RecordStore、AuthRepository、AiGateway、MediaStorage 接口
-├── infrastructure/persistence/  # MyBatis-Plus：entity / mapper / repository
-├── infrastructure/ai/           # 提示词资源加载
-├── infrastructure/storage/      # 本地文件与 S3 实现
-├── security/                    # 登录过滤、来源校验、租户上下文
-├── config/                      # 配置绑定及 Spring AI / Qdrant Bean 装配
-└── common/error/                # 共用异常
+├── controller/       # HTTP 接口、SSE 订阅与回放
+├── service/          # auth/chat/knowledge/course/questionnaire/report 等业务服务
+├── manager/          # 租户过滤、复合主键和原子存储操作
+├── mapper/           # MyBatis-Plus Mapper 与 SQL
+├── model/
+│   ├── entity/       # 数据库表映射
+│   ├── dto/          # 输入与业务传输对象
+│   ├── vo/           # 专用响应对象
+│   └── ...           # chat/course/questionnaire 等业务记录与快照
+├── integration/      # ai/vector/storage 接口及适配实现
+├── observability/    # Trace 与 HTTP 追踪
+├── config/           # 配置与组件装配
+├── security/         # 认证、租户上下文
+└── common/           # 通用异常与工具
 ```
 
-Controller 负责请求校验、协议与响应，课程发布事务、报告生成、视频权限等由 Service 处理；业务服务通过仓储/存储接口访问基础设施。SSE 生命周期和 HTTP Range 流式响应留在 Web 层。当前是实用分层，不是完全无框架依赖的领域模型：聊天上下文仍使用 Spring AI 消息类型，文件上传接口仍使用 MultipartFile；知识检索通过领域端口隔离 Qdrant 适配。
+Controller 负责请求校验、协议与响应，课程发布事务、报告生成、视频权限等由 Service 处理；数据库访问通过 Manager 和 Mapper，外部服务通过 integration 接口接入。SSE 生命周期和 HTTP Range 流式响应留在 Web 层。当前是实用分层，不是完全无框架依赖的领域模型：聊天上下文仍使用 Spring AI 消息类型，文件上传接口仍使用 MultipartFile；知识检索通过 `KnowledgeVectorIndex` 接口隔离 Qdrant 适配。
 
-旧业务接口保留；新任务 API 与 Flyway 数据迁移见 [运行架构](docs/runtime.md)。评测脚本递归记录全部 Java 源码哈希，避免分包后漏记来源。
-
-### 轻量本地 Embedding 启动
-
-`./start.sh --vector` 使用本地 EmbeddingGemma + Qdrant，回复仍为演示模式；配置 DeepSeek Key 后 `./start.sh --live` 才使用真实回答。脚本需要已安装 Docker 与 Ollama，并按需下载模型，不自动安装系统软件。
-
-默认 `EMBEDDING_MODEL=embeddinggemma`。未指定 `QDRANT_COLLECTION` 时，脚本为默认模型选择 `mindhaven_embeddinggemma_v1`，为旧 `bge-m3` 选择原集合名，其他模型按名称哈希生成集合名。手动启动后端时默认也是 EmbeddingGemma 集合；切换模型需手动指定新集合。已有 `.env` 中的显式模型和集合配置优先，不会被脚本改写。相同模型名的权重版本升级也需指定新集合、重新同步索引。
+前端按 `features/home`、`chat`、`surveys`、`courses`、`admin` 组织功能；聊天协议位于 `features/chat/api.ts`，状态位于 `useChat.ts`，组件负责展示。`shared` 管理编辑离开提醒，`styles/tokens.css` 管理主题。评测脚本递归记录 Java 源码哈希。
 
 ### 对话意图与资料边界
 
 普通聊天回复统一由配置的模型流式生成，没有按关键词返回固定话术。明确的寒暄及“吃饭”等独立宽泛主题跳过检索，模型根据上下文自然回应或澄清；回答调用正常计入用量。有历史时，这类短答保留上下文交给模型回应，但不追加检索材料。“那怎么办”等指代在有历史时仍按原流程改写、检索；“失眠”等简短症状不会因字数少被过滤。当前为有限规则分流，并非通用意图分类器。
 
 提示词区分用户已确认的事实、助手猜测及知识资料，禁止将材料建议说成用户经历。引用检查仍只校验编号；语义支持需要评测，不能靠提示词保证。
+
+### 自动上下文压缩配置
+
+聊天 API 不再接受压缩开关。后端配置：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MODEL_CONTEXT_WINDOW` | `12000` | 模型/网关实际可用窗口，应随模型配置；不是自动发现值 |
+| `CONTEXT_COMPRESSION_THRESHOLD` | `0.8` | 输入估算达到窗口比例时触发，同时预留输出和安全余量 |
+| `CONTEXT_KEEP_RECENT_TURNS` | `3` | 压缩后保留的完整历史轮次，不含当前输入 |
+| `CONTEXT_MAX_COMPRESSION_PASSES` | `4` | 单轮最多摘要批次，防止无界调用 |
+| `CHAT_MAX_INPUT_CHARACTERS` | `1500` | 单条输入长度上限，可调低，API 硬上限为 1500 |
+| `CONTEXT_COMPRESSION_ENABLED` | `true` | 服务端实验开关，普通聊天保持开启 |
+
+Token 目前采用保守的 UTF-8 字节估算，不是模型 tokenizer 精确计数。评测脚本从 health 读取实际压缩配置，不通过请求切换压缩；对照实验需分别启动不同服务端配置并保存不同输出文件。禁用压缩时不注入旧摘要，超预算明确失败，不静默截断历史。
+
+## Trace 与本地 Jaeger
+
+后端使用 OpenTelemetry SDK，默认 `TRACE_SAMPLE_RATE=1.0`。完成的 Span 写入后端日志，包含 traceId、spanId、父 Span、操作名、耗时和状态；HTTP 响应头 `X-Trace-Id` 可用于检索 `backend.log`。AI 任务入队时捕获追踪上下文，工作线程恢复后创建 `ai.run`，回答、改写、摘要、Embedding、检索和上下文组装分别记录子 Span。
+
+Apple 芯片 Mac 启动控制台：
+
+```bash
+./scripts/start-jaeger.sh
+```
+
+脚本下载并校验固定版本 Jaeger。在 `.env` 配置以下地址并重启应用，随后打开 [Jaeger](http://127.0.0.1:16686)，选择 `mindhaven-backend` 查询新请求：
+
+```dotenv
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces
+```
+
+未配置该地址时不向外部导出 Trace。`config/jaeger-local.yml` 仅监听本机，使用内存存储，最多保留 10000 条 Trace，退出后清空。
+
+Span 属性包含检索模式和结果数量、上下文预算、摘要版本、引用数量、模型与提示词哈希、用量来源及排队耗时；Events 记录阶段开始、完成、失败及模型首段返回。`ai.first_chunk_ms` 从单次模型调用开始计时，与整轮 `firstTokenMs` 不同；HTTP Span 只统计请求分派，生成总耗时查看 `ai.run`。SSE 重连是独立请求，通过 runId 关联。
+
+仅记录操作元数据，不记录聊天正文、提示词全文、检索原文、凭证、完整 URL 或异常正文。目前没有逐条 SQL、Qdrant 内部或外部模型服务的跨服务 Span；runId 与 traceId 通过日志及导出 Span 关联，未写入任务表，旧任务不会补生成 Trace。
