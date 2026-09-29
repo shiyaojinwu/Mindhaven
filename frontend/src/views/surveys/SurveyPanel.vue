@@ -10,6 +10,7 @@ import type { SurveySnapshot } from "../../types/surveys.js";
 import type { Report } from "../../types/reports.js";
 import { useUnsavedChanges } from "../../composables/useUnsavedChanges.js";
 const emit = defineEmits<{ submitted: [Report] }>();
+const props = defineProps<{ initialId?: string }>();
 const surveys = ref<SurveySnapshot[]>([]),
   selected = ref<SurveySnapshot | null>(null);
 const error = ref(""),
@@ -34,6 +35,8 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   try {
     surveys.value = await listSurveys();
+    const requested = surveys.value.find((s) => s.id === props.initialId);
+    if (requested) await open(requested);
   } catch (e) {
     error.value = (e as Error).message;
   } finally {

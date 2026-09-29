@@ -68,7 +68,8 @@ public class ContextPlanner {
         messages.add(new SystemMessage(prompts.get("answer").text()));
         if (summary != null) messages.add(new UserMessage(renderer.summary(summary.content())));
         for (var message : uncovered(history, summary)) {
-            messages.add(message.role().equals("user") ? new UserMessage(message.content()) : new AssistantMessage(message.content()));
+            messages.add(message.role().equals("user") ? new UserMessage(message.content()) : new AssistantMessage(message.content() + ("partial".equals(message.status())
+                    ? "\n[执行状态：这条回答仅部分完成。用户要求继续时，从已有正文末尾衔接，不重复已完成部分；用户要求重写或修改时遵循新要求。]" : "")));
         }
         messages.add(new UserMessage(currentTurn));
         int total = messages.stream().mapToInt(m -> estimate(m.getText())).sum();
@@ -79,7 +80,7 @@ public class ContextPlanner {
      * Keeps whole successful turns, never a failed message or half of a turn.
      */
     public List<ChatMessage> uncovered(List<ChatMessage> history, Summary summary) {
-        var eligible = history.stream().filter(m -> m.status().equals("complete") && (summary == null || m.seq() > summary.coveredThroughSeq())).toList();
+        var eligible = history.stream().filter(m -> (m.status().equals("complete") || m.status().equals("partial")) && (summary == null || m.seq() > summary.coveredThroughSeq())).toList();
         List<ChatMessage> turns = new ArrayList<>();
         for (int i = 0; i + 1 < eligible.size(); i++) {
             var user = eligible.get(i);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { RouterLink } from "vue-router";
 import MessageContent from "./MessageContent.vue";
 import MessageSources from "./MessageSources.vue";
 import {
@@ -16,6 +17,7 @@ const props = defineProps<{ chat: ReturnType<typeof useChat>; mode: string }>();
 const emit = defineEmits<{ source: [Citation]; knowledge: [] }>();
 const {
   sessions,
+  agentSteps,
   sessionId,
   messages,
   draft,
@@ -140,24 +142,61 @@ async function startNew() {
             }}</span>
             <div class="bubble">
               <span v-if="!m.content && sending" class="thinking"
-                >正在倾听…</span
+                >{{ status || "正在连接…" }}</span
               ><MessageContent
                 :content="m.content"
                 :sources="m.citations ?? []"
                 @source="emit('source', $event)"
               />
             </div>
+            <div
+              v-if="m.recommendations?.length"
+              class="recommendation-list"
+              aria-label="本轮找到的课程与问卷"
+            >
+              <RouterLink
+                v-for="item in m.recommendations"
+                :key="item.kind + item.id"
+                class="recommendation-card"
+                :to="{
+                  name: item.kind === 'course' ? 'courses' : 'survey',
+                  query: { item: item.id },
+                }"
+              >
+                <span class="tag">{{
+                  item.kind === "course" ? "微课堂" : "问卷"
+                }}</span>
+                <strong>{{ item.title }}</strong>
+                <span>{{ item.description }}</span>
+                <span
+                  >{{
+                    item.kind === "course" ? "查看课程" : "查看问卷"
+                  }}
+                  →</span
+                >
+              </RouterLink>
+            </div>
             <MessageSources
               v-if="m.role === 'assistant'"
               :message="m"
               @source="emit('source', $event)"
             />
+            <span v-if="m.status === 'partial'" class="failed-label">本轮仅完成部分内容，可继续</span>
             <span v-if="m.status === 'failed'" class="failed-label"
               >本轮未完成，不会注入后续上下文</span
             >
           </div>
         </div>
       </div>
+      <details v-if="agentSteps.length" class="agent-progress" :open="activeRun">
+        <summary>本轮执行过程 · {{ agentSteps.length }} 个阶段</summary>
+        <ol>
+          <li v-for="(item, index) in agentSteps" :key="item.sequence ?? index"
+              :class="{ 'current-stage': activeRun && index === agentSteps.length - 1 }">
+            <span>第 {{ item.step }} 步</span> {{ item.label }}
+          </li>
+        </ol>
+      </details>
       <div class="chat-run-status" role="status">
         <span>{{ status }}</span>
         <button v-if="activeRun" class="text-button" @click="stop">
@@ -204,3 +243,39 @@ async function startNew() {
     </section>
   </div>
 </template>
+
+<style scoped>
+.agent-progress {
+  margin: 0 20px 8px;
+  color: var(--muted, #586b61);
+  font-size: 13px;
+}
+.agent-progress summary { cursor: pointer; }
+.agent-progress ol { margin: 8px 0; padding-left: 22px; max-height: 140px; overflow-y: auto; }
+.agent-progress li { padding: 3px 0; }
+.agent-progress li span { margin-right: 8px; }
+.current-stage { color: var(--text, #253e32); font-weight: 600; }
+
+.recommendation-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.recommendation-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #dce5e0);
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+  background: var(--surface, #fff);
+}
+.recommendation-card > span {
+  font-size: 13px;
+}
+.recommendation-card:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+</style>

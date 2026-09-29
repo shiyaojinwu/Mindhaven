@@ -1,6 +1,14 @@
 package com.mindhaven.config;
 
 import com.mindhaven.integration.ai.AiGateway;
+import com.mindhaven.model.ai.AgentStep;
+import com.mindhaven.model.ai.AgentTool;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.ai.chat.model.MessageAggregator;
+import org.springframework.web.client.RestClient;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import com.mindhaven.service.chat.ContextPlanner;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.QdrantGrpcClient;
@@ -25,11 +33,14 @@ import java.util.regex.Pattern;
 @Configuration
 public class AiConfiguration {
     @Bean
-    @ConditionalOnProperty(name = "mindhaven.ai-mode", havingValue = "li ve")
+    @ConditionalOnProperty(name = "mindhaven.ai-mode", havingValue = "live")
     AiGateway liveGateway(Settings s) {
         if (s.chatKey() == null || s.chatKey().isBlank())
             throw new IllegalArgumentException("Live mode requires DEEPSEEK_API_KEY");
-        var api = OpenAiApi.builder().baseUrl(s.chatBaseUrl()).apiKey(s.chatKey()).completionsPath(s.chatPath()).build();
+        var http = new SimpleClientHttpRequestFactory();
+        http.setConnectTimeout(Duration.ofSeconds(10));
+        http.setReadTimeout(Duration.ofSeconds(45));
+        var api = OpenAiApi.builder().restClientBuilder(RestClient.builder().requestFactory(http)).baseUrl(s.chatBaseUrl()).apiKey(s.chatKey()).completionsPath(s.chatPath()).build();
         var model = OpenAiChatModel.builder().openAiApi(api).defaultOptions(OpenAiChatOptions.builder().model(s.chatModel()).temperature(0.2).build()).build();
         return new AiGateway() {
             private Prompt prompt(List<Message> m, int max) {
@@ -39,6 +50,49 @@ public class AiConfiguration {
             private Result result(String text, ChatResponse response) {
                 var u = response == null ? null : response.getMetadata().getUsage();
                 return new Result(text, u == null ? null : u.getPromptTokens(), u == null ? null : u.getCompletionTokens());
+            }
+
+            public AgentStep step(List<Message> messages, int max, List<AgentTool> tools) {
+                return streamStep(messages, max, tools, ignored -> {});
+            }
+
+            public AgentStep streamStep(List<Message> messages, int max, List<AgentTool> tools, Consumer<String> emit) {
+                List<ToolCallback> definitions = tools.stream().map(tool -> (ToolCallback) new ToolCallback() {
+                    public ToolDefinition getToolDefinition() {
+                        return ToolDefinition.builder().name(tool.name()).description(tool.description())
+                                .inputSchema(tool.inputSchema()).build();
+                    }
+                    public String call(String arguments) {
+                        throw new IllegalStateException("Tools must execute through the application permission boundary");
+                    }
+                }).toList();
+                var options = OpenAiChatOptions.builder().model(s.chatModel()).temperature(0.2)
+                        .maxTokens(max).streamUsage(true).toolCallbacks(definitions)
+                        .internalToolExecutionEnabled(false).parallelToolCalls(false)
+                        .toolChoice(tools.isEmpty() ? "none" : "auto").build();
+                ChatResponse[] aggregate = {null};
+                var stream = new MessageAggregator().aggregate(model.stream(new Prompt(messages, options)), value -> aggregate[0] = value);
+                try (var responses = stream.timeout(Duration.ofSeconds(45))
+                        .takeUntilOther(Mono.delay(Duration.ofSeconds(90)).then(Mono.error(new TimeoutException("Model call deadline exceeded"))))
+                        .toStream(1)) {
+                    responses.forEachOrdered(chunk -> {
+                        if (chunk.getResult() != null) {
+                            String text = chunk.getResult().getOutput().getText();
+                            if (text != null && !text.isEmpty()) emit.accept(text);
+                        }
+                    });
+                }
+                var response = aggregate[0];
+                if (response == null || response.getResult() == null) throw new IllegalStateException("Model returned no response");
+                var usage = response.getMetadata().getUsage();
+                String reason = response.getResult().getMetadata().getFinishReason();
+                LoggerFactory.getLogger(AiConfiguration.class).info(
+                        "Agent response: finishReason={}, textLength={}, toolCount={}", reason,
+                        response.getResult().getOutput().getText() == null ? 0 : response.getResult().getOutput().getText().length(),
+                        response.getResult().getOutput().getToolCalls().size());
+                boolean hasUsage = usage != null && usage.getTotalTokens() != null && usage.getTotalTokens() > 0;
+                return new AgentStep(response.getResult().getOutput(), reason == null ? "" : reason.toLowerCase(Locale.ROOT),
+                        hasUsage ? usage.getPromptTokens() : null, hasUsage ? usage.getCompletionTokens() : null);
             }
 
             public Result complete(List<Message> m, int max) {

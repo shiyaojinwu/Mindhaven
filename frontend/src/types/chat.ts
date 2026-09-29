@@ -1,11 +1,18 @@
 import type { Citation, CitationCheck, RetrievalMatch } from "./knowledge.js";
 
+export interface Recommendation {
+  kind: "course" | "survey";
+  id: string;
+  title: string;
+  description: string;
+}
 export interface Message {
   id: string;
   role: string;
   content: string;
   status: string;
   citations: Citation[];
+  recommendations?: Recommendation[];
   citationCheck?: CitationCheck | null;
 }
 
@@ -62,6 +69,12 @@ export interface ChatCommand {
   requestId: string;
 }
 export type RunEvent =
+  | {
+      name: "agent-status";
+      data: { phase: string; label: string; step: number; toolName?: string | null; toolCallId?: string | null; arguments?: string | null };
+    }
+  | { name: "recommendations"; data: Recommendation[] }
+  | { name: "answer-reset"; data: Record<string, never> }
   | { name: "delta"; data: { text: string } }
   | { name: "sources"; data: Citation[] }
   | { name: "done"; data: { message: Message; metrics: Metric } }

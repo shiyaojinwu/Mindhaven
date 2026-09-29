@@ -8,10 +8,10 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface MessageMapper extends BaseMapper<MessageEntity> {
     @Insert("""
-            INSERT INTO chat_message (row_id, tenant_id, owner_id, id, session_id, seq, role, content, created_at, citations_json, status, citation_check_json)
-            VALUES (#{rowId}, #{tenantId}, #{ownerId}, #{id}, #{sessionId}, #{seq}, #{role}, #{content}, #{createdAt}, #{citationsJson}, #{status}, #{citationCheckJson})
+            INSERT INTO chat_message (row_id, tenant_id, owner_id, id, session_id, seq, role, content, created_at, citations_json, status, citation_check_json, recommendations_json)
+            VALUES (#{rowId}, #{tenantId}, #{ownerId}, #{id}, #{sessionId}, #{seq}, #{role}, #{content}, #{createdAt}, #{citationsJson}, #{status}, #{citationCheckJson}, #{recommendationsJson})
             ON CONFLICT (tenant_id, owner_id, id)
-            DO UPDATE SET session_id=excluded.session_id, seq=excluded.seq, role=excluded.role, content=excluded.content, citations_json=excluded.citations_json, status=excluded.status, citation_check_json=excluded.citation_check_json
+            DO UPDATE SET session_id=excluded.session_id, seq=excluded.seq, role=excluded.role, content=excluded.content, citations_json=excluded.citations_json, status=excluded.status, citation_check_json=excluded.citation_check_json, recommendations_json=excluded.recommendations_json
             """)
     void upsert(MessageEntity row);
 }

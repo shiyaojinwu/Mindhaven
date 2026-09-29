@@ -48,7 +48,7 @@ public class ChatRunService implements AutoCloseable {
         volatile ScheduledFuture<?> timeout;
     }
 
-    public ChatRunService(Tracer tracer, ChatService chat, SessionService sessions, RunManager runs, ObjectMapper json, @Value("${mindhaven.runtime.deadline-seconds:180}") int deadlineSeconds, @Value("${mindhaven.runtime.token-budget:24000}") int tokenBudget) {
+    public ChatRunService(Tracer tracer, ChatService chat, SessionService sessions, RunManager runs, ObjectMapper json, @Value("${mindhaven.runtime.deadline-seconds:180}") int deadlineSeconds, @Value("${mindhaven.runtime.token-budget:1500000}") int tokenBudget) {
         this.tracer = tracer;
         this.chat = chat;
         this.sessions = sessions;
@@ -128,6 +128,10 @@ public class ChatRunService implements AutoCloseable {
             chat.turn(runs.get(id).sessionId(), input.message(), input.topic(), input.version(), input.rewrite(), event -> {
                 RunContext.check();
                 switch (event) {
+                    case ChatEvent.AnswerReset ignored -> {
+                        pending.setLength(0);
+                        runs.append(id, "answer-reset", Map.of());
+                    }
                     case ChatEvent.Delta delta -> {
                         pending.append(delta.text());
                         long now = System.nanoTime();
@@ -139,6 +143,14 @@ public class ChatRunService implements AutoCloseable {
                     case ChatEvent.Sources sources -> {
                         flushPending(id, pending);
                         runs.append(id, "sources", sources.citations());
+                    }
+                    case ChatEvent.AgentStatus status -> {
+                        flushPending(id, pending);
+                        runs.append(id, "agent-status", status);
+                    }
+                    case ChatEvent.Recommendations recommendations -> {
+                        flushPending(id, pending);
+                        runs.append(id, "recommendations", recommendations.items());
                     }
                     case ChatEvent.Done ignored -> flushPending(id, pending);
                 }

@@ -10,6 +10,7 @@
   },
   "include": [
     "src/utils/sse.ts",
+    "src/views/chat/useChat.ts",
     "src/views/courses/useCourses.ts",
     "src/views/reports/useReports.ts",
     "src/views/posts/usePosts.ts",

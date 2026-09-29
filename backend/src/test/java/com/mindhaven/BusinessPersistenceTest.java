@@ -1,6 +1,9 @@
 package com.mindhaven;
 
 import com.mindhaven.manager.*;
+import com.mindhaven.service.chat.ContextPlanner;
+import com.mindhaven.config.Settings;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import com.mindhaven.model.chat.Session;
 import com.mindhaven.model.chat.ChatMessage;
 import com.mindhaven.model.chat.CitationCheck;
@@ -21,6 +24,10 @@ import static org.assertj.core.api.Assertions.*;
 
 @SpringBootTest(properties = {"spring.datasource.url=jdbc:sqlite::memory:", "mindhaven.ai-mode=demo", "mindhaven.vector-mode=local"})
 class BusinessPersistenceTest {
+    @Autowired
+    ContextPlanner planner;
+    @Autowired
+    Settings settings;
     @Autowired
     SessionManager sessions;
     @Autowired
@@ -97,4 +104,26 @@ class BusinessPersistenceTest {
             assertThat(messages.list("s")).hasSize(1);
         }
     }
+    @Test
+    void partialReplySurvivesDatabaseReadAndAppearsInContinuationContext() {
+        String t = tenant();
+        try (var scope = TenantContext.open(identity(t, "alice"))) {
+            sessions.save(new Session("continue", "长文", "2026-01-01"));
+            messages.save(new ChatMessage("u", "continue", 1, "user", "写六部分", "2026-01-01", List.of(), "complete"));
+            messages.save(new ChatMessage("a", "continue", 2, "assistant", "第四部分：独特的续写末尾", "2026-01-01", List.of(), "partial"));
+            messages.save(new ChatMessage("failed", "continue", 3, "user", "不应出现", "2026-01-01", List.of(), "failed"));
+            var history = messages.completeAfter("continue", 0);
+            assertThat(history).extracting(ChatMessage::id).containsExactly("u", "a");
+            var plan = planner.plan(history, null, "继续", List.of(), settings);
+            assertThat(plan.messages().stream().filter(m -> m instanceof AssistantMessage)
+                    .map(m -> m.getText()).toList()).singleElement()
+                    .asString().contains("独特的续写末尾", "仅部分完成", "不重复已完成部分");
+            assertThat(messages.list("continue").get(1).status()).isEqualTo("partial");
+            assertThat(messages.completeAfter("continue", 2)).isEmpty();
+        }
+        try (var scope = TenantContext.open(identity(t, "bob"))) {
+            assertThat(messages.completeAfter("continue", 0)).isEmpty();
+        }
+    }
+
 }

@@ -28,6 +28,10 @@ public final class RunContext {
         return CURRENT.get() == null ? null : CURRENT.get().id;
     }
 
+    public static int remaining() {
+        return CURRENT.get() == null ? Integer.MAX_VALUE : CURRENT.get().remaining;
+    }
+
     public static void check() {
         if (Thread.currentThread().isInterrupted() || (CURRENT.get() != null && CURRENT.get().cancelled.getAsBoolean()))
             throw new CancellationException("任务已停止");
@@ -45,8 +49,18 @@ public final class RunContext {
         execution.remaining -= tokens;
     }
 
+    /** Settle one completed reservation; failed calls retain their conservative charge. */
+    public static void settle(int reserved, int input, int output) {
+        if (reserved < 0 || input < 0 || output < 0) throw new IllegalArgumentException("Invalid token usage");
+        var execution = CURRENT.get();
+        if (execution != null) {
+            long balance = (long) execution.remaining + reserved - input - output;
+            execution.remaining = (int) Math.max(0, Math.min(Integer.MAX_VALUE, balance));
+        }
+    }
+
     public static AutoCloseable open(String id, BooleanSupplier cancelled) {
-        return open(id, cancelled, 24000);
+        return open(id, cancelled, 1500000);
     }
 
     public static AutoCloseable open(String id, BooleanSupplier cancelled, int budget) {

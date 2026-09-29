@@ -17,6 +17,10 @@ public class MessageEntity {
     private String citationsJson;
     private String status;
     private String citationCheckJson;
+    private String recommendationsJson;
+
+    public String getRecommendationsJson() { return recommendationsJson; }
+    public void setRecommendationsJson(String recommendationsJson) { this.recommendationsJson = recommendationsJson; }
 
     public String getRowId() {
         return rowId;

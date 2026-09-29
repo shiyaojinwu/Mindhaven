@@ -51,13 +51,14 @@ class MigrationTest {
         }
         var before = jdbc.queryForList("SELECT * FROM tenant_records");
         var flyway = flyway(ds);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
         assertThat(jdbc.queryForList("SELECT * FROM tenant_records")).isEqualTo(before);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_session", Integer.class)).isEqualTo(4);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_message", Integer.class)).isEqualTo(4);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM knowledge_chunk", Integer.class)).isEqualTo(2);
         var migrated = jdbc.queryForMap("SELECT * FROM chat_message WHERE tenant_id='tenant-a' AND owner_id='alice'");
         assertThat(migrated).containsEntry("id", "message").containsEntry("content", "原有私密对话").containsEntry("created_at", "2025-01-01");
+        assertThat(migrated.get("recommendations_json")).isEqualTo("[]");
         assertThat(migrated.get("citations_json").toString()).contains("引用快照");
         assertThat(migrated.get("citation_check_json").toString()).contains("VALID");
         assertThat(flyway.migrate().migrationsExecuted).isZero();

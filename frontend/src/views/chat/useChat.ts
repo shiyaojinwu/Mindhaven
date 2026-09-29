@@ -24,6 +24,7 @@ export function useChat() {
     draft = ref(""),
     topic = ref("全部"),
     version = ref("v1");
+  const agentSteps = ref<{ sequence: number | null; phase: string; label: string; step: number }[]>([]);
   const activeRun = ref(false);
   const sending = ref(false),
     error = ref(""),
@@ -59,6 +60,7 @@ export function useChat() {
   }
   async function attach(run: ChatRun, generation: number) {
     runId.value = run.id;
+    agentSteps.value = [];
     activeRun.value = !terminal(run);
     sending.value = !terminal(run);
     status.value = "正在连接…";
@@ -97,8 +99,15 @@ export function useChat() {
             return;
           if (sequence !== null) cursor = sequence;
           const current = messages.value.find((m) => m.id === partial.id);
+          if (event.name === "agent-status") {
+            status.value = event.data.label;
+            agentSteps.value.push({ ...event.data, sequence });
+          }
+          if (event.name === "recommendations" && current)
+            current.recommendations = event.data;
           if (event.name === "sources" && current)
             current.citations = event.data;
+          if (event.name === "answer-reset" && current) current.content = "";
           if (event.name === "delta" && current) {
             current.content += event.data.text;
             error.value = "";
@@ -111,7 +120,7 @@ export function useChat() {
               event.data.metrics,
               ...metrics.value.filter((m) => m.id !== event.data.metrics.id),
             ];
-            status.value = "回复已完成";
+            status.value = event.data.message.status === "partial" ? "已保留部分回复，可继续" : "回复已完成";
             error.value = "";
             pending = null;
           }
@@ -126,7 +135,7 @@ export function useChat() {
             pending = null;
             status.value =
               event.data.status === "COMPLETED"
-                ? "回复已完成"
+                ? (messages.value.at(-1)?.status === "partial" ? "已保留部分回复，可继续" : "回复已完成")
                 : event.data.error || "本次任务已结束";
             if (current && event.data.status !== "COMPLETED")
               current.status = "failed";
@@ -170,6 +179,7 @@ export function useChat() {
     error.value = "";
     status.value = "";
     runId.value = "";
+    agentSteps.value = [];
     const [history, runs] = await Promise.all([
       getMessages(id),
       recentRuns(id),
@@ -189,6 +199,7 @@ export function useChat() {
     error.value = "";
     status.value = "";
     runId.value = "";
+    agentSteps.value = [];
     const session = await createSession();
     sessions.value.unshift(session);
     sessionId.value = session.id;
@@ -259,6 +270,7 @@ export function useChat() {
   onBeforeUnmount(detach);
   return {
     sessions,
+    agentSteps,
     sessionId,
     messages,
     metrics,

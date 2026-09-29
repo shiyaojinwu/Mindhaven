@@ -3,6 +3,7 @@ import type { Metric } from "../../types/chat.js";
 defineProps<{ metric: Metric }>();
 const modes: Record<string, string> = {
   "hybrid-rrf": "BM25 + 向量 · RRF 融合",
+  agent: "Agent 按需检索与工具调用",
   dense: "向量检索",
   bm25: "本地 BM25",
   direct: "模型日常回应（跳过检索）",
@@ -22,7 +23,7 @@ const checks = {
     <summary>本轮检索与上下文</summary>
     <div class="diagnostics">
       <p>检索方式：{{ modes[metric.retrievalMode ?? ""] ?? "旧记录未保存" }}</p>
-      <p>改写查询：{{ metric.rewrittenQuery }}</p>
+      <p>{{ metric.retrievalMode === "agent" ? "本轮问题" : "改写查询" }}：{{ metric.rewrittenQuery }}</p>
       <p>
         检索 {{ metric.retrievedCount }} 篇 · 注入上下文
         {{ metric.contextIds?.length ?? "未记录" }} 篇 · 首段耗时
@@ -30,7 +31,7 @@ const checks = {
       </p>
       <p>输入预算估算：{{ metric.contextEstimate }}（UTF-8 字节保守估算）</p>
       <p>
-        回答 Token：{{ metric.promptTokens ?? "未提供" }} 输入 /
+        {{ metric.retrievalMode === "agent" ? "Agent 各步累计 Token" : "回答 Token" }}：{{ metric.promptTokens ?? "未提供" }} 输入 /
         {{ metric.completionTokens ?? "未提供" }} 输出
       </p>
       <p>

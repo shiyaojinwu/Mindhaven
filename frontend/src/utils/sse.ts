@@ -43,7 +43,16 @@ export class SseParser {
       }
       if (
         data.length &&
-        ["sources", "delta", "done", "error", "terminal"].includes(name)
+        [
+          "sources",
+          "delta",
+          "answer-reset",
+          "done",
+          "error",
+          "terminal",
+          "agent-status",
+          "recommendations",
+        ].includes(name)
       )
         events.push({ name, sequence, data: JSON.parse(data.join("\n")) });
     }

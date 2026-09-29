@@ -6,6 +6,9 @@ import com.mindhaven.integration.storage.*;
 import com.mindhaven.integration.vector.*;
 import com.mindhaven.manager.UsageManager;
 import com.mindhaven.model.ai.AiUsage;
+import com.mindhaven.model.ai.AgentStep;
+import com.mindhaven.model.ai.AgentTool;
+import com.mindhaven.service.agent.AgentMessageBudget;
 import com.mindhaven.service.chat.ContextPlanner;
 import io.opentelemetry.api.trace.Span;
 import org.springframework.ai.chat.messages.Message;
@@ -66,6 +69,9 @@ public class AiOperations {
                 emit.accept(delta);
             });
             RunContext.check();
+            RunContext.settle(input + max,
+                    result.promptTokens() != null && result.promptTokens() >= 0 ? result.promptTokens() : input,
+                    result.completionTokens() != null && result.completionTokens() >= 0 ? result.completionTokens() : ContextPlanner.estimate(partial.toString()));
             status = "COMPLETED";
             return result;
         } catch (CancellationException e) {
@@ -83,6 +89,52 @@ public class AiOperations {
                 if (out != null) span.setAttribute("ai.output_tokens", out);
                 span.setAttribute("ai.output_tokens_estimated", demo ? 0 : ContextPlanner.estimate(partial.toString()));
                 usage.save(new AiUsage(UUID.randomUUID().toString(), RunContext.id(), purpose, demo ? "deterministic-demo" : settings.chatModel(), prompts.get(purpose).hash(), interrupted ? "CANCELLED" : status, source, in, out, demo ? 0 : input, demo ? 0 : ContextPlanner.estimate(partial.toString()), (System.nanoTime() - start) / 1_000_000, Instant.now().toString()));
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /** Each native tool decision is budgeted and accounted independently. */
+    public AgentStep step(List<Message> messages, int max, List<AgentTool> tools) {
+        return streamStep(messages, max, tools, ignored -> {});
+    }
+
+    public AgentStep streamStep(List<Message> messages, int max, List<AgentTool> tools, Consumer<String> emit) {
+        int input = AgentMessageBudget.estimate(messages, tools);
+        if (input + max + 200 > settings.contextBudget()) throw new IllegalArgumentException("Agent 上下文预算不足，请新建对话");
+        RunContext.reserve(input + max);
+        long started = System.nanoTime();
+        AgentStep result = null;
+        String status = "FAILED";
+        try {
+            result = gateway.streamStep(messages, max, tools, text -> { RunContext.check(); emit.accept(text); });
+            RunContext.check();
+            RunContext.settle(input + max,
+                    result.promptTokens() != null && result.promptTokens() >= 0 ? result.promptTokens() : input,
+                    result.completionTokens() != null && result.completionTokens() >= 0 ? result.completionTokens() : AgentMessageBudget.estimate(List.of(result.message()), List.of()));
+            status = "COMPLETED";
+            return result;
+        } catch (CancellationException e) {
+            status = "CANCELLED";
+            throw e;
+        } finally {
+            boolean interrupted = Thread.interrupted();
+            try {
+                Integer in = result == null ? null : result.promptTokens();
+                Integer out = result == null ? null : result.completionTokens();
+                int output = result == null ? 0 : AgentMessageBudget.estimate(List.of(result.message()), List.of());
+                var span = Span.current();
+                span.setAttribute("ai.input_tokens_estimated", input);
+                span.setAttribute("ai.output_tokens_estimated", output);
+                span.setAttribute("ai.status", interrupted ? "CANCELLED" : status);
+                span.setAttribute("ai.usage_source", in != null && out != null ? "provider" : "estimated");
+                if (in != null) span.setAttribute("ai.input_tokens", in);
+                if (out != null) span.setAttribute("ai.output_tokens", out);
+                usage.save(new AiUsage(UUID.randomUUID().toString(), RunContext.id(), "agent", settings.chatModel(),
+                        prompts.get("agent").hash(), interrupted ? "CANCELLED" : status,
+                        in != null && out != null ? "provider" : "estimated", in, out, input, output,
+                        (System.nanoTime() - started) / 1_000_000, Instant.now().toString()));
             } finally {
                 if (interrupted) Thread.currentThread().interrupt();
             }

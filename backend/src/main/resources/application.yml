@@ -24,6 +24,12 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
 mindhaven:
+  agent:
+    enabled: ${AGENT_ENABLED:true}
+    max-steps: ${AGENT_MAX_STEPS:4}
+    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:3}
+    max-searches: ${AGENT_MAX_SEARCHES:2}
+    tool-result-budget: ${AGENT_TOOL_RESULT_BUDGET:2400}
   tracing:
     sample-rate: ${TRACE_SAMPLE_RATE:1.0}
     otlp-endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:}
@@ -34,7 +40,7 @@ mindhaven:
     vector-threshold: ${RAG_VECTOR_THRESHOLD:0.35}
   runtime:
     deadline-seconds: ${AI_RUN_DEADLINE_SECONDS:180}
-    token-budget: ${AI_RUN_TOKEN_BUDGET:24000}
+    token-budget: ${AI_RUN_TOKEN_BUDGET:1500000}
   media-storage: ${MEDIA_STORAGE:local}
   s3:
     endpoint: ${S3_ENDPOINT:}
@@ -60,14 +66,14 @@ mindhaven:
   qdrant-port: ${QDRANT_PORT:6334}
   qdrant-collection: ${QDRANT_COLLECTION:mindhaven_embeddinggemma_v1}
   # Configure the effective context window supported by your model/gateway.
-  context-budget: ${MODEL_CONTEXT_WINDOW:12000}
+  context-budget: ${MODEL_CONTEXT_WINDOW:384000}
   context:
     compression-enabled: ${CONTEXT_COMPRESSION_ENABLED:true}
     compression-threshold: ${CONTEXT_COMPRESSION_THRESHOLD:0.8}
     keep-recent-turns: ${CONTEXT_KEEP_RECENT_TURNS:3}
     max-compression-passes: ${CONTEXT_MAX_COMPRESSION_PASSES:4}
     max-input-characters: ${CHAT_MAX_INPUT_CHARACTERS:1500}
-  output-budget: 1400
+  output-budget: ${MODEL_MAX_OUTPUT_TOKENS:1400}
   knowledge-budget: 3600
 logging:
   pattern:

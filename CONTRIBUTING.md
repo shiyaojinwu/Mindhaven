@@ -17,7 +17,7 @@ python3 scripts/test_launcher.py
 git diff --check
 ```
 
-后端遵循 Controller → Service → Manager → Mapper；外部模型、向量与存储适配放在 integration。前端按 features 组织。涉及权限、数据迁移、流式恢复或模型预算时，请补充对应回归测试。
+后端遵循 Controller → Service → Manager → Mapper；外部模型、向量与存储适配放在 integration。前端按 views、components、api 等职责组织，页面专用逻辑与页面放在一起。涉及权限、数据迁移、流式恢复或模型预算时，请补充对应回归测试。
 
 PR 请说明解决的问题、行为变化、验证结果和兼容性影响。不要提交密钥、真实对话、个人答卷、数据库、上传文件或运行日志。新增演示资料应确认允许公开使用。
 

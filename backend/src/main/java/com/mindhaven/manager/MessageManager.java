@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mindhaven.mapper.MessageMapper;
 import com.mindhaven.model.chat.CitationCheck;
+import com.mindhaven.model.ai.Recommendation;
 import com.mindhaven.model.chat.ChatMessage;
 import com.mindhaven.model.entity.MessageEntity;
 import com.mindhaven.model.knowledge.Citation;
@@ -34,7 +35,7 @@ public class MessageManager {
     }
 
     public List<ChatMessage> completeAfter(String sessionId, long coveredThroughSeq) {
-        return mapper.selectList(scoped().eq("session_id", sessionId).eq("status", "complete").gt("seq", coveredThroughSeq).orderByAsc("seq")).stream().map(this::model).toList();
+        return mapper.selectList(scoped().eq("session_id", sessionId).in("status", List.of("complete", "partial")).gt("seq", coveredThroughSeq).orderByAsc("seq")).stream().map(this::model).toList();
     }
 
     public long maxSequence(String sessionId) {
@@ -61,11 +62,12 @@ public class MessageManager {
         row.setStatus(value.status());
         row.setCitationsJson(write(value.citations()));
         row.setCitationCheckJson(value.citationCheck() == null ? null : write(value.citationCheck()));
+        row.setRecommendationsJson(write(value.recommendations()));
         mapper.upsert(row);
     }
 
     private ChatMessage model(MessageEntity row) {
-        return new ChatMessage(row.getId(), row.getSessionId(), row.getSeq(), row.getRole(), row.getContent(), row.getCreatedAt(), readCitations(row.getCitationsJson()), row.getStatus(), readCheck(row.getCitationCheckJson()));
+        return new ChatMessage(row.getId(), row.getSessionId(), row.getSeq(), row.getRole(), row.getContent(), row.getCreatedAt(), readCitations(row.getCitationsJson()), row.getStatus(), readCheck(row.getCitationCheckJson()), readRecommendations(row.getRecommendationsJson()));
     }
 
     private String write(Object value) {
@@ -83,6 +85,12 @@ public class MessageManager {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Cannot decode citations", e);
         }
+    }
+
+    private List<Recommendation> readRecommendations(String value) {
+        if (value == null) return List.of();
+        try { return json.readValue(value, new TypeReference<List<Recommendation>>() { }); }
+        catch (JsonProcessingException e) { throw new IllegalStateException("Cannot decode recommendations", e); }
     }
 
     private CitationCheck readCheck(String value) {
