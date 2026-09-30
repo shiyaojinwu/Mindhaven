@@ -1,19 +1,15 @@
 # Mindhaven · 心屿
 
-面向心理健康科普与自我记录的 AI 应用，支持多租户机构管理、知识问答、问卷评估和微课堂。由心屿 App 延伸为独立的前后端演示项目，用于探索 AI 应用与 Web 开发。
+由心屿 App 延伸而来的前后端演示项目，围绕心理科普、情绪记录和学习资源，探索 Agent、RAG 与 Web 应用开发。借助 AI 辅助实现，持续完善中。
 
-默认使用 SQLite，无需模型密钥即可运行演示模式；可接入真实模型、本地 Embedding 和 Qdrant。
+## 可以做什么
 
-## 功能
-
-- **AI 对话**：流式回复、历史会话、停止生成与断线恢复；Agent 可查询知识、课程和问卷，执行过程可展开回看。
-- **知识检索**：BM25 与向量混合检索、RRF 排序、主题和版本过滤、引用原文回查。
-- **上下文管理**：完整消息持久化、自动摘要压缩、近期对话保留与模型用量记录。
-- **问卷评估**：问卷录入、草稿与发布、版本快照、答卷保存和报告解读。
-- **微课堂**：课程配置、视频上传、发布管理和学习记录，支持本地或 S3 兼容存储。
-- **机构管理**：机构管理员与成员账号，按租户及用户隔离数据。
-- **个人记录**：心情记录与私人树洞。
-- **实时与可观测性**：可选 Redis Streams 实时事件与断线恢复，数据库保存最终结果及 Outbox 通知；支持 OpenTelemetry 和 Jaeger。
+- **聊一聊**：流式对话、历史会话与停止生成；自动摘要压缩上下文，优先保留近期三轮对话，执行过程和中间草稿可展开回看。
+- **按需查资料**：Agent 调用知识、课程和问卷工具，支持参数校验、分页、任务内缓存与重复查询检测；可恢复的工具错误返回模型处理。
+- **让回答有据可查**：融合 BM25 与 Qdrant 向量检索，通过 RRF 排序，按主题和版本筛选资料，支持引用来源标识校验与原文回查。
+- **做问卷、看课程**：问卷发布与填写、报告解读、视频课程与学习记录；推荐卡片来自实际查询到的资源。
+- **记录心情、管理机构**：心情记录与私人树洞，机构成员与内容管理，按租户及用户隔离数据。
+- **断线恢复与执行追踪**：Redis Streams + SSE 按游标补发事件，最终回答与 Outbox 通知同事务保存；通过 OpenTelemetry + Jaeger 查看模型和工具链路，记录耗时、Token 用量及提示词哈希。
 
 ## 技术栈
 
@@ -21,19 +17,21 @@
 | --- | --- |
 | 前端 | Vue 3、TypeScript、Vite、Vue Router |
 | 后端 | Java 21、Spring Boot、Spring AI、MyBatis-Plus |
-| 数据存储 | SQLite、Flyway；可选 Redis Streams、S3 兼容对象存储 |
+| 存储 | SQLite、Flyway、Redis Streams；可选 S3 兼容对象存储 |
 | AI 与检索 | DeepSeek 兼容接口、Ollama、Qdrant、BM25 / RRF |
 | 可观测性 | OpenTelemetry、Jaeger |
 
-## 快速开始
+## Agent 架构
 
-### 环境要求
+![Mindhaven Agent 分层架构](docs/diagrams/agent-architecture.svg)
 
-- JDK 21+
-- Maven 3.9+
-- Node.js 20.19+
+[查看大图](docs/diagrams/agent-architecture.svg) · [draw.io 源文件](docs/diagrams/agent-architecture.drawio)
 
-### 启动项目
+后端采用 `Controller → Service → Manager → Mapper` 分层，模型、向量和存储通过 `integration` 接入。Agent 与事件服务运行在同一后端进程，Worker 使用任务线程池。
+
+## 本地运行
+
+准备 JDK 21+、Maven 3.9+ 和 Node.js 20.19+：
 
 ```bash
 git clone https://github.com/shiyaojinwu/Mindhaven.git
@@ -41,109 +39,16 @@ cd Mindhaven
 ./start.sh
 ```
 
-启动脚本会安装前端依赖、构建后端并启动服务。macOS 也可双击 `start.command`。
+打开 http://127.0.0.1:5173 ，在登录页创建机构和管理员账号。默认使用 SQLite 和演示回复，无需模型密钥。macOS 也可双击 `start.command`。
 
-- 应用：http://127.0.0.1:5173
-- 健康检查：http://127.0.0.1:8080/api/health
+| 命令 | 运行方式 |
+| --- | --- |
+| `./start.sh` | 演示回复 + BM25 |
+| `./start.sh --ai` | 真实模型 + BM25 |
+| `./start.sh --vector` | 演示回复 + 混合检索 |
+| `./start.sh --live` | 真实模型 + 混合检索 |
+| `./start.sh --check` | 检查依赖、配置和端口 |
 
-首次打开页面，选择「我是管理员，创建新机构」，创建机构和管理员账号，再添加成员、配置问卷及课程。没有预设登录账号。
+接入真实模型时，参考 [.env.example](.env.example) 配置 `.env`。向量检索需要 Ollama 和 Qdrant，配置后在知识管理页面同步索引；使用 Redis 事件模式时需先安装 Redis，启动脚本会启动本地实例。
 
-按 `Ctrl+C` 停止本次启动的服务。重启不会清除数据库；日志位于 `.runtime/`。
-
-### 启动模式
-
-| 命令 | 模型回复 | 检索 |
-| --- | --- | --- |
-| `./start.sh` | 演示回复 | 本地 BM25 |
-| `./start.sh --ai` | 真实模型 | 本地 BM25 |
-| `./start.sh --vector` | 演示回复 | BM25 + Qdrant |
-| `./start.sh --live` | 真实模型 | BM25 + Qdrant |
-
-使用 `./start.sh --check` 检查依赖、配置和端口。
-
-## 配置
-
-按需将 [.env.example](.env.example) 复制为 `.env`，已有配置请勿覆盖。启动脚本自动加载该文件；不要提交密钥或 `.env`。
-
-使用示例配置中的 `RUN_EVENT_STORE=redis` 时，需要先安装 Redis（macOS：`brew install redis`）；启动脚本会启动本地 Redis。设为 `database` 可继续使用无 Redis 的兼容模式。
-
-真实模型的主要配置：
-
-```dotenv
-DEEPSEEK_API_KEY=your-api-key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_CHAT_PATH=/chat/completions
-DEEPSEEK_MODEL=deepseek-chat
-```
-
-`MODEL_CONTEXT_WINDOW` 和 `MODEL_MAX_OUTPUT_TOKENS` 应根据实际模型及网关限制设置。真实模式可能产生模型调用费用。
-
-向量模式需要 Qdrant 和 Ollama。Apple 芯片 Mac 可先执行：
-
-```bash
-./scripts/setup-vector-macos.sh
-./start.sh --vector
-```
-
-启动后，在知识管理页面同步向量索引。业务原文保存在 SQLite，向量索引保存在 Qdrant；切换 Embedding 模型后需使用新集合并重新同步。
-
-视频默认保存在 `backend/media/`；使用对象存储时设置 `MEDIA_STORAGE=s3` 及相应连接配置。备份时需同时保留数据库与媒体文件。
-
-更多配置、问卷与课程操作、存储、链路追踪和运行边界见 [配置与使用指南](docs/guide.md)。
-
-## 项目结构
-
-```text
-Mindhaven/
-├── backend/             # Spring Boot 后端
-│   └── src/main/
-│       ├── java/com/mindhaven/
-│       │   ├── controller/     # HTTP 接口
-│       │   ├── service/        # 业务编排与 Agent 执行
-│       │   ├── manager/        # 数据访问与租户条件
-│       │   ├── mapper/         # MyBatis-Plus 与 SQL
-│       │   ├── model/          # 实体、请求和响应模型
-│       │   └── integration/    # 模型、向量和存储适配
-│       └── resources/          # 配置、提示词和数据库迁移
-├── frontend/src/
-│   ├── views/           # 业务页面与专用逻辑
-│   ├── components/      # 公共组件
-│   ├── layouts/         # 页面布局
-│   ├── api/             # 后端接口与 SSE
-│   ├── router/          # 路由与权限守卫
-│   └── types/           # TypeScript 类型
-├── scripts/             # 启动辅助与评测脚本
-├── config/              # 本地服务配置
-├── eval/                # 固定评测用例
-├── docs/                # 使用文档
-└── start.sh             # 一键启动入口
-```
-
-后端采用 `Controller → Service → Manager → Mapper` 分层，外部服务通过 `integration` 接入。前端按页面与职责组织，页面专用状态使用组合式函数管理。
-
-## 开发与测试
-
-```bash
-mvn -B -f backend/pom.xml verify
-npm --prefix frontend ci
-npm --prefix frontend test
-npm --prefix frontend run build
-python3 scripts/test_launcher.py
-```
-
-GitHub Actions 执行后端测试、前端测试与构建、启动脚本检查。真实模型质量与工具选择需要单独评测，离线测试不能替代真实网关验证。
-
-## 当前限制
-
-- 项目以本地单实例运行和学习演示为主，暂不支持多副本任务调度或服务重启后自动续跑 Agent。
-- 课程、问卷和知识包含演示材料，不用于临床诊断或替代专业服务。
-- 引用检查校验来源标识，不代表已验证引用对结论的语义支持；资源真实性与摘要质量仍需完善评测。
-- PostgreSQL 配置已提供，但尚未经真实实例集成验证；默认使用 SQLite。
-
-## 参与贡献
-
-欢迎通过 Issue 反馈问题或提交 Pull Request。开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题反馈见 [SECURITY.md](SECURITY.md)。
-
-## 许可证
-
-许可证尚未确定。公开源码不代表已授予开源再分发许可，使用或分发前请与维护者确认。
+更多运行配置与使用说明见 [使用指南](docs/guide.md)。

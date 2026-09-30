@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1210" viewBox="0 0 1560 1210" role="img" aria-labelledby="title desc">
+<title id="title">Mindhaven Agent 分层架构</title><desc id="desc">用户交互、应用编排、Agent 核心、能力适配和存储服务，以及 Redis SSE 事件通道。</desc>
+<rect width="1560" height="1210" fill="#F8FAFC"/>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect x="40.0" y="20.0" width="1460.0" height="75.0" rx="10" fill="#E9EFF8" stroke="#CBD5E1"/>
+<text x="770.0" y="49.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="20" font-weight="600">MINDHAVEN  /  AGENT ARCHITECTURE</text>
+<text x="770.0" y="76.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="20" font-weight="600">模块化单体 · 受控工具循环 · 流式交互与可靠结果保存</text>
+<rect x="40.0" y="125.0" width="1190.0" height="115.0" rx="10" fill="#EFF6FF" stroke="#CBD5E1"/>
+<text x="56.0" y="148.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">01   用户交互层 · Vue / TypeScript</text>
+<rect x="60.0" y="170.0" width="365.0" height="55.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="242.5" y="192.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">会话与任务</text>
+<text x="242.5" y="213.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">发送 · 取消 · 继续</text>
+<rect x="445.0" y="170.0" width="365.0" height="55.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="627.5" y="192.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">回答呈现</text>
+<text x="627.5" y="213.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">流式正文 · 引用 · 资源卡片</text>
+<rect x="830.0" y="170.0" width="365.0" height="55.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1012.5" y="192.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">执行过程</text>
+<text x="1012.5" y="213.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">阶段 · 工具参数 · 中间草稿</text>
+<rect x="40.0" y="290.0" width="1190.0" height="120.0" rx="10" fill="#EFF6FF" stroke="#CBD5E1"/>
+<text x="56.0" y="313.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">02   接入与应用编排 · Spring Boot</text>
+<rect x="60.0" y="335.0" width="365.0" height="60.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="242.5" y="359.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">Controller</text>
+<text x="242.5" y="380.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">HTTP API · 身份与归属验证</text>
+<rect x="445.0" y="335.0" width="365.0" height="60.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="627.5" y="359.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">ChatRunService</text>
+<text x="627.5" y="380.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">幂等 · Worker 线程池 · 生命周期</text>
+<rect x="830.0" y="335.0" width="365.0" height="60.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1012.5" y="359.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">ChatService / ChatCommitService</text>
+<text x="1012.5" y="380.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">会话编排 · 最终结果事务</text>
+<rect x="40.0" y="465.0" width="1190.0" height="210.0" rx="10" fill="#EEEAF8" stroke="#CBD5E1"/>
+<text x="56.0" y="488.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">03   AGENT 核心 · 职责分离</text>
+<rect x="60.0" y="515.0" width="1135.0" height="55.0" rx="10" fill="#DCD5F0" stroke="#CBD5E1"/>
+<text x="627.5" y="537.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">AgentRunner</text>
+<text x="627.5" y="558.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">执行循环 · 分派工具 · 校验回答 · 收尾</text>
+<rect x="60.0" y="595.0" width="365.0" height="60.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="242.5" y="619.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">AgentContext</text>
+<text x="242.5" y="640.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">容量检查 · 摘要压缩 · 检查点</text>
+<rect x="445.0" y="595.0" width="365.0" height="60.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="627.5" y="619.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">AgentTaskProgress</text>
+<text x="627.5" y="640.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">任务内缓存 · 重复查询与进展检测</text>
+<rect x="830.0" y="595.0" width="365.0" height="60.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1012.5" y="619.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">AgentToolExecutor</text>
+<text x="1012.5" y="640.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">Schema 校验 · 三个只读工具</text>
+<rect x="40.0" y="730.0" width="1190.0" height="145.0" rx="10" fill="#EAF5F1" stroke="#CBD5E1"/>
+<text x="56.0" y="753.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">04   能力服务与基础设施适配</text>
+<rect x="60.0" y="775.0" width="270.0" height="80.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="195.0" y="799.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">模型调用</text>
+<text x="195.0" y="820.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">AiOperations → AiGateway</text>
+<text x="195.0" y="841.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">用量追踪 → 模型协议适配</text>
+<rect x="355.0" y="775.0" width="270.0" height="80.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="490.0" y="799.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">业务能力</text>
+<text x="490.0" y="820.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">知识检索 · 课程 · 问卷</text>
+<text x="490.0" y="841.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">真实资源 · 引用 · 分页</text>
+<rect x="650.0" y="775.0" width="270.0" height="80.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="785.0" y="799.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">数据访问</text>
+<text x="785.0" y="820.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">Manager → Mapper</text>
+<text x="785.0" y="841.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">MyBatis-Plus / 事务</text>
+<rect x="945.0" y="775.0" width="270.0" height="80.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1080.0" y="799.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">向量适配</text>
+<text x="1080.0" y="820.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">KnowledgeVectorIndex</text>
+<text x="1080.0" y="841.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">查询向量与索引</text>
+<rect x="40.0" y="930.0" width="1190.0" height="130.0" rx="10" fill="#F1F5F9" stroke="#CBD5E1"/>
+<text x="56.0" y="953.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">05   数据与外部服务</text>
+<rect x="60.0" y="975.0" width="365.0" height="65.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="242.5" y="1002.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">DeepSeek 兼容网关</text>
+<text x="242.5" y="1023.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">正文增量 / tool_calls</text>
+<rect x="445.0" y="975.0" width="365.0" height="65.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="627.5" y="1002.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">SQLite</text>
+<text x="627.5" y="1023.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">业务数据 · 执行状态 · 最终消息</text>
+<rect x="830.0" y="975.0" width="365.0" height="65.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1012.5" y="1002.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">Ollama + Qdrant</text>
+<text x="1012.5" y="1023.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">Embedding · 向量检索</text>
+<rect x="1270.0" y="125.0" width="260.0" height="580.0" rx="10" fill="#F8EFF6" stroke="#CBD5E1"/>
+<text x="1286.0" y="148.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">实时事件通道</text>
+<rect x="1290.0" y="175.0" width="220.0" height="85.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1400.0" y="201.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">SSE 连接</text>
+<text x="1400.0" y="222.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">RunEventStream</text>
+<text x="1400.0" y="243.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">按游标恢复 / 有界发送</text>
+<rect x="1290.0" y="305.0" width="220.0" height="85.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1400.0" y="331.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">RunEventReader</text>
+<text x="1400.0" y="352.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">共享分组 XREAD</text>
+<text x="1400.0" y="373.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">按 runId 分发</text>
+<rect x="1290.0" y="435.0" width="220.0" height="80.0" rx="10" fill="#F2DAE9" stroke="#CBD5E1"/>
+<text x="1400.0" y="459.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">Redis Streams</text>
+<text x="1400.0" y="480.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">每任务一条流</text>
+<text x="1400.0" y="501.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">近期事件回放</text>
+<rect x="1290.0" y="560.0" width="220.0" height="100.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1400.0" y="583.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">RunEventPublisher</text>
+<text x="1400.0" y="604.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">正文合并 · 过程事件发布</text>
+<text x="1400.0" y="625.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">OutboxPublisher</text>
+<text x="1400.0" y="646.5" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">终态发布与失败重试</text>
+<rect x="1270.0" y="730.0" width="260.0" height="330.0" rx="10" fill="#F1F5F9" stroke="#CBD5E1"/>
+<text x="1286.0" y="753.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">横切能力</text>
+<rect x="1290.0" y="785.0" width="220.0" height="100.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1400.0" y="819.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">TenantContext / RunContext</text>
+<text x="1400.0" y="840.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">租户隔离 · 取消 · 超时</text>
+<text x="1400.0" y="861.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">任务预算与调用边界</text>
+<rect x="1290.0" y="920.0" width="220.0" height="100.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="1400.0" y="954.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">OpenTelemetry → Jaeger</text>
+<text x="1400.0" y="975.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">模型 / 工具 / 检索 Span</text>
+<text x="1400.0" y="996.0" text-anchor="middle" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="400">耗时 · 用量 · 错误</text>
+<rect x="40.0" y="1095.0" width="1490.0" height="90.0" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+<text x="56.0" y="1125.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" font-weight="400">数据边界  SQLite 保存长期业务事实；Redis 保存近期展示事件。最终消息、任务终态与 Outbox 同事务提交。</text>
+<text x="56.0" y="1145.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" font-weight="400">事件来源  Agent 回调经会话与任务服务交给 Publisher；Outbox 从 SQLite 读取待发布通知。图中省略跨层细线，避免交叉。</text>
+<text x="56.0" y="1165.0" text-anchor="start" fill="#243247" font-family="Arial, PingFang SC, Microsoft YaHei, sans-serif" font-size="13" font-weight="400">部署边界  02–04 层及事件服务运行在同一后端进程；Worker 是线程池，不是独立微服务。</text>
+<path d="M 1400.0 560.0 V 537.5 H 1400.0 V 515.0" fill="none" stroke="#A15F92" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="1370.0" y="520.5" width="60" height="17" rx="3" fill="#F8FAFC"/><text x="1400.0" y="532.5" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#A15F92">XADD</text>
+<path d="M 1400.0 435.0 V 412.5 H 1400.0 V 390.0" fill="none" stroke="#A15F92" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="1382.0" y="395.5" width="36" height="17" rx="3" fill="#F8FAFC"/><text x="1400.0" y="407.5" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#A15F92">事件</text>
+<path d="M 1400.0 305.0 V 282.5 H 1400.0 V 260.0" fill="none" stroke="#A15F92" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="1382.0" y="265.5" width="36" height="17" rx="3" fill="#F8FAFC"/><text x="1400.0" y="277.5" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#A15F92">分发</text>
+<path d="M 1290.0 217.5 H 1242.5 V 197.5 H 1195.0" fill="none" stroke="#A15F92" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="1188.5" y="196.5" width="108" height="17" rx="3" fill="#F8FAFC"/><text x="1242.5" y="208.5" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#A15F92">SSE 展示事件</text>
+<path d="M 635.0 240.0 V 265.0 H 635.0 V 290.0" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="539.0" y="248.0" width="192" height="17" rx="3" fill="#F8FAFC"/><text x="635.0" y="260.0" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#64748B">HTTP 请求 / 历史与结果</text>
+<path d="M 635.0 410.0 V 437.5 H 635.0 V 465.0" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="533.0" y="420.5" width="204" height="17" rx="3" fill="#F8FAFC"/><text x="635.0" y="432.5" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#64748B">当前问题 + 历史消息 / 摘要</text>
+<path d="M 635.0 675.0 V 702.5 H 635.0 V 730.0" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="479.0" y="685.5" width="312" height="17" rx="3" fill="#F8FAFC"/><text x="635.0" y="697.5" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#64748B">模型 messages / 工具调用 / 执行状态</text>
+<path d="M 195.0 855.0 V 915.0 H 242.5 V 975.0" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="176.75" y="898.0" width="84" height="17" rx="3" fill="#F8FAFC"/><text x="218.75" y="910.0" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#64748B">模型 API</text>
+<path d="M 785.0 855.0 V 915.0 H 627.5 V 975.0" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="676.25" y="898.0" width="60" height="17" rx="3" fill="#F8FAFC"/><text x="706.25" y="910.0" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#64748B">业务读写</text>
+<path d="M 1080.0 855.0 V 915.0 H 1012.5 V 975.0" fill="none" stroke="#64748B" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="1016.25" y="898.0" width="60" height="17" rx="3" fill="#F8FAFC"/><text x="1046.25" y="910.0" text-anchor="middle" font-family="Arial, PingFang SC, sans-serif" font-size="12" fill="#64748B">向量查询</text>
+</svg>
