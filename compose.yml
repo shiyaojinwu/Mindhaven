@@ -1,4 +1,11 @@
 services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
   qdrant:
     image: qdrant/qdrant:v1.13.6
     ports:
@@ -7,4 +14,5 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 volumes:
+  redis_data:
   qdrant_data:

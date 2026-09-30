@@ -8,6 +8,7 @@ import com.mindhaven.mapper.MessageMapper;
 import com.mindhaven.model.chat.CitationCheck;
 import com.mindhaven.model.ai.Recommendation;
 import com.mindhaven.model.chat.ChatMessage;
+import com.mindhaven.model.chat.ChatEvent;
 import com.mindhaven.model.entity.MessageEntity;
 import com.mindhaven.model.knowledge.Citation;
 import com.mindhaven.security.TenantContext;
@@ -63,11 +64,18 @@ public class MessageManager {
         row.setCitationsJson(write(value.citations()));
         row.setCitationCheckJson(value.citationCheck() == null ? null : write(value.citationCheck()));
         row.setRecommendationsJson(write(value.recommendations()));
+        row.setExecutionJson(write(value.execution()));
         mapper.upsert(row);
     }
 
     private ChatMessage model(MessageEntity row) {
-        return new ChatMessage(row.getId(), row.getSessionId(), row.getSeq(), row.getRole(), row.getContent(), row.getCreatedAt(), readCitations(row.getCitationsJson()), row.getStatus(), readCheck(row.getCitationCheckJson()), readRecommendations(row.getRecommendationsJson()));
+        return new ChatMessage(row.getId(), row.getSessionId(), row.getSeq(), row.getRole(), row.getContent(), row.getCreatedAt(), readCitations(row.getCitationsJson()), row.getStatus(), readCheck(row.getCitationCheckJson()), readRecommendations(row.getRecommendationsJson()), readExecution(row.getExecutionJson()));
+    }
+
+    private List<ChatEvent.AgentStatus> readExecution(String value) {
+        if (value == null) return List.of();
+        try { return json.readValue(value, new TypeReference<List<ChatEvent.AgentStatus>>() { }); }
+        catch (JsonProcessingException e) { throw new IllegalStateException("Cannot decode execution stages", e); }
     }
 
     private String write(Object value) {

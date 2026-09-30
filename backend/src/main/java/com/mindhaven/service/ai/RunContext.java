@@ -11,6 +11,7 @@ public final class RunContext {
         final String id;
         final BooleanSupplier cancelled;
         int remaining;
+        String parentId;
 
         Execution(String id, BooleanSupplier cancelled, int budget) {
             this.id = id;
@@ -27,6 +28,8 @@ public final class RunContext {
     public static String id() {
         return CURRENT.get() == null ? null : CURRENT.get().id;
     }
+
+    public static String parentId() { return CURRENT.get() == null ? null : CURRENT.get().parentId; }
 
     public static int remaining() {
         return CURRENT.get() == null ? Integer.MAX_VALUE : CURRENT.get().remaining;
@@ -61,6 +64,12 @@ public final class RunContext {
 
     public static AutoCloseable open(String id, BooleanSupplier cancelled) {
         return open(id, cancelled, 1500000);
+    }
+
+    public static AutoCloseable open(String id, BooleanSupplier cancelled, int budget, String parentId) {
+        var scope = open(id, cancelled, budget);
+        CURRENT.get().parentId = parentId;
+        return scope;
     }
 
     public static AutoCloseable open(String id, BooleanSupplier cancelled, int budget) {

@@ -107,6 +107,9 @@ if [[ "$MODE" == live || "$MODE" == ai ]]; then
 fi
 printf '检查通过：模式 %s，Java %s，Node %s\n' "$MODE" "$(java -version 2>&1 | head -n 1)" "$(node --version)"
 [[ "$CHECK" == 1 ]] && exit 0
+if [[ "${RUN_EVENT_STORE:-database}" == redis && "${REDIS_URI:-redis://127.0.0.1:6379}" == redis://127.0.0.1:6379 ]]; then
+  bash "$ROOT/scripts/start-redis.sh"
+fi
 RUN_DIR="$ROOT/.runtime/run-$(date +%Y%m%d-%H%M%S)-$$"
 mkdir -p "$RUN_DIR"
 # Keep the package cache writable even when the user-level npm cache is unavailable.

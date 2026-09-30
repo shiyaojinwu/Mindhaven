@@ -13,10 +13,12 @@ import com.mindhaven.model.knowledge.RetrievalResult;
 import com.mindhaven.observability.TraceSupport;
 import com.mindhaven.security.TenantContext;
 import com.mindhaven.service.ai.AiOperations;
+import com.mindhaven.service.chat.CitationVerifier;
 import com.mindhaven.service.ai.RunContext;
 import io.opentelemetry.api.trace.Tracer;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage.ToolResponse;
 import org.springframework.stereotype.Service;
@@ -66,24 +68,36 @@ public class AgentRunner {
 
     public Result run(List<Message> initial, String topic, String version, Consumer<ChatEvent> events) {
         TenantContext.require();
-        List<Message> messages = new ArrayList<>(initial);
+        var restored = context.restoredMessages();
+        List<Message> messages = new ArrayList<>(restored == null || restored.isEmpty() ? initial : restored);
         messages.set(0, new SystemMessage(prompts.get("agent").text()));
         var citations = new LinkedHashMap<String, Citation>();
         var recommendations = new LinkedHashMap<String, Recommendation>();
         var matches = new LinkedHashMap<String, RetrievalResult.Match>();
-        Set<String> attempted = new HashSet<>();
+        AgentTaskProgress progress = new AgentTaskProgress();
+        String originalRequest = initial.stream().filter(UserMessage.class::isInstance).map(Message::getText).reduce((a, b) -> b).orElse("");
+        String restoredGoal = context.originalGoal(originalRequest);
+        if (restoredGoal != null) originalRequest = restoredGoal;
+        context.save("goal", Map.of("version", 1, "originalRequest", originalRequest));
         Set<String> callIds = new HashSet<>();
+        progress.restore(context.restoredCache());
+        for (var entry : progress.cacheSnapshot()) {
+            entry.result().citations().forEach(c -> citations.putIfAbsent(c.id(), c));
+            entry.result().recommendations().forEach(item -> recommendations.putIfAbsent(item.kind() + ":" + item.id(), item));
+        }
         int calls = 0, searches = 0, peak = 0, inputTokens = 0, outputTokens = 0;
         boolean knownUsage = true;
+        int citationRepairs = 0;
         RetrievalResult.Configuration retrievalConfig = null;
+        // Current request remains a user message through compaction. Reattach the original goal on resume.
+        if (RunContext.parentId() != null) messages.set(messages.size() - 1,
+                new UserMessage("原任务要求（用户数据）：" + originalRequest + "\n继续完成该任务，不重复已完成内容。"));
+        context.save("cache", progress.cacheSnapshot());
         for (int step = 1; step <= limits.maxSteps(); step++) {
             RunContext.check();
             var available = new ArrayList<>(tools.definitions());
-            long nextCost = (long) AgentMessageBudget.estimate(messages, available) + settings.outputBudget();
-            long closingReserve = AgentMessageBudget.estimate(messages, List.of())
-                    + settings.outputBudget() + limits.toolResultBudget() + 1200L;
-            boolean budgetClosing = nextCost + closingReserve > RunContext.remaining();
-            boolean allowTools = !budgetClosing && step < limits.maxSteps() && calls < limits.maxToolCalls();
+            boolean allowTools = step < limits.maxSteps()
+                    && (limits.maxToolCalls() == 0 || calls < limits.maxToolCalls()) && !progress.stalled();
             List<AgentTool> definitions = allowTools ? List.copyOf(available) : List.of();
             // Prepare with schemas and result headroom before deciding whether tools fit.
             String state = calls == 0 ? "本轮尚未执行任何查询。历史课程不是本轮新查询结果。" : "本轮已尝试工具调用，仅成功的工具结果可作为当前查询依据。";
@@ -144,6 +158,9 @@ public class AgentRunner {
                     "toolCalls", response.message().getToolCalls()));
             if ("length".equals(response.finishReason()) && !response.message().hasToolCalls()
                     && response.message().getText() != null && !response.message().getText().isBlank()) {
+                messages.add(response.message());
+                context.checkpoint(step, messages);
+                context.save("resumable", true);
                 String notice = "\n\n【本轮达到输出长度限制，以上内容尚未全部完成，可继续生成。】";
                 events.accept(new ChatEvent.Delta(notice));
                 events.accept(new ChatEvent.AgentStatus("partial", "已保留正文，输出尚未完成", step));
@@ -167,6 +184,22 @@ public class AgentRunner {
                     messages.add(new SystemMessage(e.getMessage() + "。请重新给出完整有效回答，不要只补充标点。"));
                     continue;
                 }
+                var citationCheck = new CitationVerifier().verify(answer, List.copyOf(citations.values()));
+                if (!citationCheck.invalidIds().isEmpty()) {
+                    events.accept(new ChatEvent.AnswerReset());
+                    if (++citationRepairs > 2 || step == limits.maxSteps()) {
+                        return partial(events, citations, recommendations, matches, retrievalConfig, peak,
+                                "引用尚未核实，未将该回答作为已确认结果");
+                    }
+                    // Keep the rejected draft as data so the model can correct the exact claims.
+                    messages.add(assistant);
+                    messages.add(new SystemMessage("上一份回答引用校验未通过。以下 ID 不属于本任务已确认来源："
+                            + citationCheck.invalidIds() + "。当前允许引用的 ID：" + citations.keySet()
+                            + "。历史回答中的引用不构成本轮证据。请使用可用工具重新核实相关原文；"
+                            + "若无法核实，撤回对应来源归因及无依据的具体说法，明确资料局限。"
+                            + "不要仅替换成另一个 ID。请重新输出完整回答，不要只补充标点。"));
+                    continue;
+                }
                 RunContext.check();
                 context.save("completed", Map.of("step", step, "answer", answer));
                 events.accept(new ChatEvent.Sources(List.copyOf(citations.values())));
@@ -184,7 +217,7 @@ public class AgentRunner {
                     throw new IllegalArgumentException("工具调用标识无效");
             }
             long batchSearches = batch.stream().filter(call -> "searchKnowledge".equals(call.name())).count();
-            if (batch.size() > limits.maxToolCalls() - calls || batchSearches > limits.maxSearches() - searches) {
+            if ((limits.maxToolCalls() > 0 && batch.size() > limits.maxToolCalls() - calls) || (limits.maxSearches() > 0 && batchSearches > limits.maxSearches() - searches)) {
                 var rejected = new ArrayList<ToolResponse>();
                 for (var call : batch) {
                     rejected.add(toolError(call.id(), call.name(), "TOOL_CALL_LIMIT",
@@ -195,23 +228,9 @@ public class AgentRunner {
                 context.save("rejected-calls-" + step, batch);
                 events.accept(new ChatEvent.AgentStatus("tool-error", "查询次数受限，正在整理已有结果…", step));
                 calls = limits.maxToolCalls();
+                progress.repeated(); progress.repeated(); progress.repeated();
                 continue;
             }
-            var signatures = new HashSet<String>();
-            boolean duplicate = batch.stream().anyMatch(call -> {
-                String key = call.name() + ":" + call.arguments();
-                return attempted.contains(key) || !signatures.add(key);
-            });
-            if (duplicate) {
-                var rejected = batch.stream().map(call -> toolError(call.id(), call.name(), "DUPLICATE_CALL",
-                        "本批包含重复查询，整批未执行。请使用已有结果并说明限制。", false)).toList();
-                messages.add(assistant);
-                messages.add(ToolResponseMessage.builder().responses(rejected).build());
-                calls = limits.maxToolCalls();
-                events.accept(new ChatEvent.AgentStatus("tool-error", "重复查询已阻止，正在整理已有结果…", step));
-                continue;
-            }
-            attempted.addAll(signatures);
             context.save("calls-" + step, batch);
             calls += batch.size();
             searches += (int) batchSearches;
@@ -220,6 +239,15 @@ public class AgentRunner {
                 RunContext.check();
                 events.accept(new ChatEvent.AgentStatus("tool", toolLabel(call.name()), step, call.name(), call.id(), call.arguments()));
                 AgentToolExecutor.Result result;
+                String cacheKey = progress.key(call.name(), call.arguments());
+                var cached = progress.cached(cacheKey);
+                if (cached != null) {
+                    progress.repeated();
+                    responses.add(new ToolResponse(call.id(), call.name(), progress.cachedPayload(cached)));
+                    context.save("result-" + call.id(), Map.of("source", "task_cache", "result", cached));
+                    events.accept(new ChatEvent.AgentStatus("cache-hit", "重复查询，已复用本任务的结果", step, call.name(), call.id(), call.arguments()));
+                    continue;
+                }
                 var toolSpan = tracer.spanBuilder("agent.tool").startSpan();
                 toolSpan.setAttribute("agent.tool", toolLabel(call.name()));
                 toolSpan.setAttribute("agent.step", step);
@@ -228,6 +256,7 @@ public class AgentRunner {
                     try { result = tools.execute(call.name(), call.arguments(), topic, version); }
                     catch (ToolArgumentException e) {
                         scope.failed(e);
+                        progress.failed("INVALID_ARGUMENTS");
                         String feedback = JsonNodeFactory.instance.objectNode()
                                 .put("status", "error").put("code", "INVALID_ARGUMENTS")
                                 .put("message", e.getMessage()).put("retryable", true).toString();
@@ -243,13 +272,14 @@ public class AgentRunner {
                                 && !(e instanceof TransientDataAccessException)) throw e;
                         responses.add(toolError(call.id(), call.name(), "TOOL_UNAVAILABLE",
                                 "工具暂时不可用，本次没有取得有效结果。可在剩余次数内重试，或明确说明无法核实。", true));
-                        attempted.remove(call.name() + ":" + call.arguments());
+                        progress.failed("TOOL_UNAVAILABLE");
                         events.accept(new ChatEvent.AgentStatus("tool-error", "查询暂时不可用，正在反馈给模型…", step, call.name(), call.id(), call.arguments()));
                         continue;
                     }
                     toolSpan.setAttribute("agent.result_count", result.citations().size() + result.recommendations().size());
                 }
                 context.save("result-" + call.id(), result);
+                progress.confirmed(cacheKey, result);
                 result.citations().forEach(c -> citations.putIfAbsent(c.id(), c));
                 result.recommendations().forEach(item -> recommendations.putIfAbsent(item.kind() + ":" + item.id(), item));
                 if (result.retrieval() != null) {
@@ -260,6 +290,10 @@ public class AgentRunner {
             }
             messages.add(assistant);
             messages.add(ToolResponseMessage.builder().responses(responses).build());
+            context.save("progress", progress.snapshot());
+            context.save("cache", progress.cacheSnapshot());
+            context.checkpoint(step, messages);
+            if (progress.stalled()) messages.add(new SystemMessage("连续工具调用没有取得新进展。请基于真实结果收尾并说明未完成部分，不要继续重复查询。"));
         }
         return partial(events, citations, recommendations, matches, retrievalConfig, peak, "本轮执行次数已达上限");
     }
@@ -295,6 +329,7 @@ public class AgentRunner {
             text.append("已找到部分参考资料，但尚未完成分析：");
             citations.values().forEach(item -> text.append("\n- ").append(item.title()).append(" [").append(item.id()).append("]"));
         } else text.append("本轮没有可展示的已确认资源，不能据此判断资源不存在。请缩小查询范围后继续。");
+        context.save("resumable", true);
         context.save("partial", Map.of("reason", reason, "answer", text.toString(),
                 "resourceIds", recommendations.keySet(), "citationIds", citations.keySet()));
         events.accept(new ChatEvent.AnswerReset());

@@ -6,8 +6,13 @@ import com.mindhaven.model.ai.Recommendation;
 import java.util.List;
 
 public record ChatMessage(String id, String sessionId, long seq, String role, String content, String createdAt,
-                      List<Citation> citations, String status, CitationCheck citationCheck, List<Recommendation> recommendations) {
+                      List<Citation> citations, String status, CitationCheck citationCheck, List<Recommendation> recommendations, List<ChatEvent.AgentStatus> execution) {
+    public ChatMessage(String id, String sessionId, long seq, String role, String content, String createdAt,
+                       List<Citation> citations, String status, CitationCheck citationCheck, List<Recommendation> recommendations) {
+        this(id, sessionId, seq, role, content, createdAt, citations, status, citationCheck, recommendations, List.of());
+    }
     public ChatMessage {
+        execution = execution == null ? List.of() : List.copyOf(execution);
         recommendations = recommendations == null ? List.of() : List.copyOf(recommendations);
     }
     public ChatMessage(String id, String sessionId, long seq, String role, String content, String createdAt,

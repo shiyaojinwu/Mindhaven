@@ -1,6 +1,6 @@
 export interface SseEvent {
   name: string;
-  sequence: number | null;
+  sequence: string | null;
   data: unknown;
 }
 
@@ -24,7 +24,7 @@ export class SseParser {
       const block = this.buffer.slice(0, end);
       this.buffer = this.buffer.slice(end + 2);
       let name = "message";
-      let sequence: number | null = null;
+      let sequence: string | null = null;
       const data: string[] = [];
       for (const line of block.split("\n")) {
         if (line.startsWith(":")) continue;
@@ -34,16 +34,18 @@ export class SseParser {
           separator < 0 ? "" : line.slice(separator + 1).replace(/^ /, "");
         if (field === "event") name = value;
         if (field === "id") {
-          const number = Number(value);
-          if (!/^\d+$/.test(value) || !Number.isSafeInteger(number))
+          if (!/^\d{1,20}(-\d{1,20})?$/.test(value))
             throw new Error("流式事件序号无效，请重新连接");
-          sequence = number;
+          sequence = value;
         }
         if (field === "data") data.push(value);
       }
       if (
         data.length &&
         [
+          "snapshot-required",
+          "transport-error",
+          "stream-start",
           "sources",
           "delta",
           "answer-reset",
@@ -60,4 +62,12 @@ export class SseParser {
       throw new Error("流式事件过大，请重新连接");
     return events;
   }
+}
+
+/** Redis IDs are decimal pairs, not floating-point JS numbers. Supports legacy numeric IDs. */
+export function compareEventIds(left: string, right: string): number {
+  const [a, b = "0"] = left.split("-");
+  const [c, d = "0"] = right.split("-");
+  if (BigInt(a) !== BigInt(c)) return BigInt(a) < BigInt(c) ? -1 : 1;
+  return BigInt(b) === BigInt(d) ? 0 : BigInt(b) < BigInt(d) ? -1 : 1;
 }

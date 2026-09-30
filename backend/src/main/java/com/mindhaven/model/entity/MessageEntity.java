@@ -18,6 +18,9 @@ public class MessageEntity {
     private String status;
     private String citationCheckJson;
     private String recommendationsJson;
+    private String executionJson;
+    public String getExecutionJson() { return executionJson; }
+    public void setExecutionJson(String value) { executionJson = value; }
 
     public String getRecommendationsJson() { return recommendationsJson; }
     public void setRecommendationsJson(String recommendationsJson) { this.recommendationsJson = recommendationsJson; }

@@ -6,7 +6,17 @@ export interface Recommendation {
   title: string;
   description: string;
 }
+export interface ExecutionStage {
+  draft?: string | null;
+  phase: string;
+  label: string;
+  step: number;
+  toolName?: string | null;
+  toolCallId?: string | null;
+  arguments?: string | null;
+}
 export interface Message {
+  execution?: ExecutionStage[];
   id: string;
   role: string;
   content: string;
@@ -69,9 +79,11 @@ export interface ChatCommand {
   requestId: string;
 }
 export type RunEvent =
+  | { name: "snapshot-required" | "stream-start"; data: Record<string, unknown> }
+  | { name: "transport-error"; data: { message: string } }
   | {
       name: "agent-status";
-      data: { phase: string; label: string; step: number; toolName?: string | null; toolCallId?: string | null; arguments?: string | null };
+      data: ExecutionStage;
     }
   | { name: "recommendations"; data: Recommendation[] }
   | { name: "answer-reset"; data: Record<string, never> }

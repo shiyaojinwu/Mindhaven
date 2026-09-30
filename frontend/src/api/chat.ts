@@ -8,15 +8,17 @@ export const createRun = (session: string, body: ChatCommand) =>
   api<ChatRun>(`/sessions/${session}/runs`, "POST", body);
 export const recentRuns = (session: string) =>
   api<ChatRun[]>(`/sessions/${session}/runs`);
+export const continueRun = (id: string) =>
+  api<ChatRun>(`/runs/${id}/continue`, "POST");
 export const cancelRun = (id: string) =>
   api<ChatRun>(`/runs/${id}/cancel`, "POST");
 export async function subscribeRun(
   id: string,
-  after: number,
+  after: string,
   signal: AbortSignal,
-  consume: (event: RunEvent, sequence: number | null) => void,
+  consume: (event: RunEvent, sequence: string | null) => void,
 ) {
-  const response = await fetch(`/api/runs/${id}/events?after=${after}`, {
+  const response = await fetch(`/api/runs/${id}/events?after=${encodeURIComponent(after)}`, {
     signal,
     headers: { Accept: "text/event-stream" },
   });
@@ -57,3 +59,5 @@ export const createSession = () => api<Session>("/sessions", "POST");
 export const getMessages = (id: string) =>
   api<Message[]>(`/sessions/${id}/messages`);
 export const listMetrics = () => api<Metric[]>("/metrics");
+
+export const getRun = (id: string) => api<ChatRun>(`/runs/${id}`);

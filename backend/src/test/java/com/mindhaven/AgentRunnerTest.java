@@ -62,6 +62,35 @@ class AgentRunnerTest {
     AgentStep answer(String reason) { return new AgentStep(new AssistantMessage("没有找到课程"), reason, 12, 6); }
 
     @Test
+    void staleCitationIsReturnedToModelForCorrection() {
+        when(ai.streamStep(anyList(), anyInt(), anyList(), any())).thenReturn(
+                new AgentStep(new AssistantMessage("建议。[old-id]"), "stop", 10, 5),
+                new AgentStep(new AssistantMessage("当前未核实相关资料，可以先聊聊你的感受。"), "stop", 10, 5));
+        var events = new ArrayList<ChatEvent>();
+        try (var scope = TenantContext.open(identity)) {
+            var result = runner.run(initial, "全部", "v1", events::add);
+            assertThat(result.answer().text()).doesNotContain("[old-id]");
+            assertThat(result.incomplete()).isFalse();
+        }
+        assertThat(events).anyMatch(ChatEvent.AnswerReset.class::isInstance);
+        verify(ai).streamStep(argThat(messages -> messages.stream()
+                .anyMatch(m -> m instanceof SystemMessage && m.getText().contains("上一份回答引用校验未通过"))),
+                anyInt(), anyList(), any());
+    }
+
+    @Test
+    void repeatedInvalidCitationEndsWithConfirmedPartialResult() {
+        when(ai.streamStep(anyList(), anyInt(), anyList(), any())).thenReturn(
+                new AgentStep(new AssistantMessage("建议。[old-id]"), "stop", 10, 5));
+        try (var scope = TenantContext.open(identity)) {
+            var result = runner.run(initial, "全部", "v1", e -> {});
+            assertThat(result.incomplete()).isTrue();
+            assertThat(result.answer().text()).doesNotContain("[old-id]");
+        }
+        verify(ai, times(3)).streamStep(anyList(), anyInt(), anyList(), any());
+    }
+
+    @Test
     void toolResultIsAddedWithOriginalCallIdBeforeFinalAnswer() {
         when(ai.streamStep(anyList(), anyInt(), anyList(), any())).thenReturn(call("call-1"), answer("stop"));
         var events = new ArrayList<ChatEvent>();
@@ -149,13 +178,13 @@ class AgentRunnerTest {
     }
 
     @Test
-    void duplicateArgumentsInBatchRejectBeforeAnyToolExecutes() {
+    void duplicateArgumentsInBatchReuseResultWithoutRejectingBatch() {
         var duplicate = new AgentStep(AssistantMessage.builder().content("").toolCalls(List.of(
                 new AssistantMessage.ToolCall("one", "function", "findCourses", "{}"),
                 new AssistantMessage.ToolCall("two", "function", "findCourses", "{}"))).build(), "tool_calls", 10, 5);
         when(ai.streamStep(anyList(), anyInt(), anyList(), any())).thenReturn(duplicate, answer("stop"));
         try (var scope = TenantContext.open(identity)) { runner.run(initial, "全部", "v1", e -> {}); }
-        verify(tools, never()).execute(anyString(), anyString(), anyString(), anyString());
+        verify(tools, times(1)).execute(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -371,6 +400,27 @@ class AgentRunnerTest {
         assertThat(AgentCompletion.answer("你可以说：请稍等，我需要整理一下想法。"))
                 .contains("整理一下想法");
         assertThat(AgentCompletion.answer("你好！")).isEqualTo("你好！");
+    }
+
+    @Test
+    void defaultStyleUnlimitedToolsCanFetchMoreThanThreePages() {
+        runner = new AgentRunner(ai, tools, new AgentSettings(true, 64, 0, 0, 512), settings, prompts,
+                OpenTelemetry.noop().getTracer("test"), mock(AgentContext.class));
+        var steps = new ArrayList<AgentStep>();
+        for (int i = 0; i < 5; i++) {
+            String args = "{\"offset\":" + (i * 30) + "}";
+            steps.add(new AgentStep(AssistantMessage.builder().content("").toolCalls(List.of(
+                    new AssistantMessage.ToolCall("page-" + i, "function", "findCourses", args))).build(), "tool_calls", 1, 1));
+            when(tools.execute(eq("findCourses"), eq(args), anyString(), anyString())).thenReturn(
+                    new AgentToolExecutor.Result("{\"items\":[{\"id\":\"page-" + i + "\"}],\"nextOffset\":" + ((i + 1) * 30) + "}", List.of(), List.of(), null));
+        }
+        steps.add(answer("stop"));
+        var iterator = steps.iterator();
+        when(ai.streamStep(anyList(), anyInt(), anyList(), any())).thenAnswer(call -> iterator.next());
+        try (var scope = TenantContext.open(identity)) {
+            assertThat(runner.run(initial, "全部", "v1", e -> {}).incomplete()).isFalse();
+        }
+        verify(tools, times(5)).execute(anyString(), anyString(), anyString(), anyString());
     }
 
 }

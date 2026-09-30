@@ -59,6 +59,6 @@ public class ChatController {
     @PostMapping(value = "/sessions/{id}/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable String id, @Valid @RequestBody ChatCommand input) {
         var command = new ChatCommand(input.message(), input.topic(), input.version(), input.rewrite(), input.requestId() == null ? UUID.randomUUID().toString() : input.requestId());
-        return streams.open(runs.create(id, command).id(), 0);
+        return streams.open(runs.create(id, command).id(), "0");
     }
 }

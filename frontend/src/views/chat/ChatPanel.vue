@@ -17,7 +17,6 @@ const props = defineProps<{ chat: ReturnType<typeof useChat>; mode: string }>();
 const emit = defineEmits<{ source: [Citation]; knowledge: [] }>();
 const {
   sessions,
-  agentSteps,
   sessionId,
   messages,
   draft,
@@ -32,6 +31,7 @@ const {
   send,
   stop,
   reconnect,
+  continueTask,
 } = props.chat;
 onMounted(() => {
   void props.chat.scroll(true);
@@ -140,6 +140,33 @@ async function startNew() {
             <span class="message-name">{{
               m.role === "assistant" ? "心屿" : "我"
             }}</span>
+            <details v-if="m.execution?.length" class="agent-progress" :open="m.status === 'pending'">
+              <summary>
+                执行过程 · {{ m.execution.length }} 个阶段
+                <span class="execution-outcome">{{ m.status === 'pending' ? '进行中' : m.status === 'complete' ? '已完成' : m.status === 'partial' ? '部分完成' : '未完成' }}</span>
+              </summary>
+              <ol>
+                <li v-for="(item, index) in m.execution" :key="index"
+                    :class="{ 'current-stage': m.status === 'pending' && index === m.execution.length - 1 }">
+                  <div class="stage-heading">
+                    <span>{{ index + 1 }}. {{ item.phase === 'draft' ? '中间草稿' : item.phase === 'tool' ? '调用工具' : item.phase === 'model' ? '模型响应' : '整理上下文与结果' }}</span>
+                    <small>第 {{ item.step }} 轮</small>
+                  </div>
+                  <span>{{ m.status === 'pending' && index === m.execution.length - 1 ? item.label : item.label.replace(/^正在/, '').replace(/[…。.]+$/, '') }}</span>
+                  <details v-if="item.draft" class="draft-detail">
+                    <summary>查看保留的文字（非最终答案）</summary>
+                    <div class="draft-text">{{ item.draft }}</div>
+                  </details>
+                  <details v-if="item.toolName" class="tool-detail">
+                    <summary>{{ item.toolName }} · 调用参数</summary>
+                    <pre>{{ item.arguments || '{}' }}</pre>
+                  </details>
+                </li>
+              </ol>
+              <p v-if="m.status !== 'pending'" class="execution-finish">
+                {{ m.status === 'complete' ? '✓ 本轮回复已完成' : m.status === 'partial' ? '本轮部分完成，可继续任务' : '本轮已结束，未全部完成' }}
+              </p>
+            </details>
             <div class="bubble">
               <span v-if="!m.content && sending" class="thinking"
                 >{{ status || "正在连接…" }}</span
@@ -182,21 +209,14 @@ async function startNew() {
               @source="emit('source', $event)"
             />
             <span v-if="m.status === 'partial'" class="failed-label">本轮仅完成部分内容，可继续</span>
+            <button v-if="m.status === 'partial' && m === messages.at(-1) && runId"
+              type="button" :disabled="sending || activeRun" @click="continueTask">继续任务</button>
             <span v-if="m.status === 'failed'" class="failed-label"
               >本轮未完成，不会注入后续上下文</span
             >
           </div>
         </div>
       </div>
-      <details v-if="agentSteps.length" class="agent-progress" :open="activeRun">
-        <summary>本轮执行过程 · {{ agentSteps.length }} 个阶段</summary>
-        <ol>
-          <li v-for="(item, index) in agentSteps" :key="item.sequence ?? index"
-              :class="{ 'current-stage': activeRun && index === agentSteps.length - 1 }">
-            <span>第 {{ item.step }} 步</span> {{ item.label }}
-          </li>
-        </ol>
-      </details>
       <div class="chat-run-status" role="status">
         <span>{{ status }}</span>
         <button v-if="activeRun" class="text-button" @click="stop">
@@ -245,16 +265,31 @@ async function startNew() {
 </template>
 
 <style scoped>
-.agent-progress {
-  margin: 0 20px 8px;
-  color: var(--muted, #586b61);
-  font-size: 13px;
-}
+/* Keep execution history inside each message, never above the composer. */
+.agent-progress { margin: 4px 0 8px; padding: 7px 10px; border: 1px solid var(--line, #e8dfe7); border-radius: 9px; color: var(--muted, #817487); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .agent-progress summary { cursor: pointer; }
-.agent-progress ol { margin: 8px 0; padding-left: 22px; max-height: 140px; overflow-y: auto; }
-.agent-progress li { padding: 3px 0; }
-.agent-progress li span { margin-right: 8px; }
-.current-stage { color: var(--text, #253e32); font-weight: 600; }
+.execution-outcome { display: inline-block; margin-left: 6px; font-size: 11px; }
+.agent-progress ol { list-style: none; margin: 6px 0 0; padding: 0; }
+.agent-progress li { padding: 5px 0; border-top: 1px solid var(--line, #eee8ee); }
+.stage-heading { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+.stage-heading small { font-weight: normal; }
+.current-stage { color: var(--text, #514554); font-weight: 600; }
+.draft-detail { margin-top: 4px; font-weight: normal; }
+.draft-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; padding: 8px; border-left: 2px solid #d7c6d3; background: #faf7fa; max-height: 220px; overflow: auto; }
+.tool-detail { margin-top: 3px; font-weight: normal; }
+.tool-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.execution-finish { margin: 6px 0 0; font-weight: 500; }
+.chat-toolbar, .mobile-session-picker, .composer, .chat-run-status, .chat-disclaimer { flex-shrink: 0; }
+.messages { min-height: 160px; overscroll-behavior: contain; }
+.chat-run-status { padding: 6px 20px; font-size: 12px; }
+.chat-run-status:empty { display: none; }
+.composer textarea { min-height: 52px; max-height: 150px; field-sizing: content; }
+@media (max-width: 760px) {
+  .chat-layout { height: max(560px, calc(100dvh - 180px)); min-height: 560px; }
+  .messages { padding: 16px 12px; }
+  .message-body { min-width: 0; }
+  .agent-progress { padding: 6px 8px; }
+}
 
 .recommendation-list {
   display: grid;

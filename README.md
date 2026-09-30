@@ -6,14 +6,14 @@
 
 ## 功能
 
-- **AI 对话**：流式回复、历史会话、停止生成与断线恢复；Agent 可查询知识、课程和问卷。
+- **AI 对话**：流式回复、历史会话、停止生成与断线恢复；Agent 可查询知识、课程和问卷，执行过程可展开回看。
 - **知识检索**：BM25 与向量混合检索、RRF 排序、主题和版本过滤、引用原文回查。
 - **上下文管理**：完整消息持久化、自动摘要压缩、近期对话保留与模型用量记录。
 - **问卷评估**：问卷录入、草稿与发布、版本快照、答卷保存和报告解读。
 - **微课堂**：课程配置、视频上传、发布管理和学习记录，支持本地或 S3 兼容存储。
 - **机构管理**：机构管理员与成员账号，按租户及用户隔离数据。
 - **个人记录**：心情记录与私人树洞。
-- **可观测性**：持久化运行事件、OpenTelemetry 链路追踪和可选 Jaeger 控制台。
+- **实时与可观测性**：可选 Redis Streams 实时事件与断线恢复，数据库保存最终结果及 Outbox 通知；支持 OpenTelemetry 和 Jaeger。
 
 ## 技术栈
 
@@ -21,7 +21,7 @@
 | --- | --- |
 | 前端 | Vue 3、TypeScript、Vite、Vue Router |
 | 后端 | Java 21、Spring Boot、Spring AI、MyBatis-Plus |
-| 数据存储 | SQLite、Flyway；可选 S3 兼容对象存储 |
+| 数据存储 | SQLite、Flyway；可选 Redis Streams、S3 兼容对象存储 |
 | AI 与检索 | DeepSeek 兼容接口、Ollama、Qdrant、BM25 / RRF |
 | 可观测性 | OpenTelemetry、Jaeger |
 
@@ -64,6 +64,8 @@ cd Mindhaven
 ## 配置
 
 按需将 [.env.example](.env.example) 复制为 `.env`，已有配置请勿覆盖。启动脚本自动加载该文件；不要提交密钥或 `.env`。
+
+使用示例配置中的 `RUN_EVENT_STORE=redis` 时，需要先安装 Redis（macOS：`brew install redis`）；启动脚本会启动本地 Redis。设为 `database` 可继续使用无 Redis 的兼容模式。
 
 真实模型的主要配置：
 

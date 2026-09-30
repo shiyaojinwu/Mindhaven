@@ -15,7 +15,11 @@ public sealed interface ChatEvent {
         }
     }
     record AgentStatus(String phase, String label, int step, String toolName, String toolCallId,
-                       String arguments) implements ChatEvent {
+                       String arguments, String draft) implements ChatEvent {
+        public AgentStatus(String phase, String label, int step, String toolName, String toolCallId,
+                           String arguments) {
+            this(phase, label, step, toolName, toolCallId, arguments, null);
+        }
         public AgentStatus(String phase, String label, int step) {
             this(phase, label, step, null, null, null);
         }

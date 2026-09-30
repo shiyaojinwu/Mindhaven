@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mindhaven.common.Hashes;
 import com.mindhaven.common.error.HttpProblem;
 import com.mindhaven.manager.RunManager;
+import com.mindhaven.manager.RecordManager;
+import com.mindhaven.service.event.RunEventPublisher;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.mindhaven.model.chat.AiRun;
 import com.mindhaven.model.dto.ChatCommand;
 import com.mindhaven.observability.TraceSupport;
@@ -37,13 +40,38 @@ public class ChatRunService implements AutoCloseable {
     private final ObjectMapper json;
     private final int deadlineSeconds;
     private final int tokenBudget;
+    private RecordManager records;
+    private RunEventPublisher eventPublisher;
+    @Autowired
+    public void eventPublisher(RunEventPublisher eventPublisher) { this.eventPublisher = eventPublisher; }
+    @Autowired
+    public void records(RecordManager records) { this.records = records; }
+    public record Continuation(ChatCommand command, String parentId, int remaining, long elapsedMillis) { }
+
+    public synchronized AiRun continueRun(String id) {
+        var previous = runs.get(id);
+        String requestId = "continue:" + id;
+        var priorChild = runs.recent(previous.sessionId()).stream().filter(run -> requestId.equals(run.requestId())).findFirst();
+        if (priorChild.isPresent()) return priorChild.get();
+        if (jobs.containsKey(id) || previous.status() != AiRun.Status.COMPLETED) throw new HttpProblem(409, "任务仍在结束处理中，请稍后继续");
+        if (!runs.recent(previous.sessionId()).getFirst().id().equals(id)) throw new HttpProblem(409, "会话已有新任务，请按当前要求继续");
+        if (!records.get("agent-state", id + ":resumable", Boolean.class).orElse(false))
+            throw new HttpProblem(409, "此任务没有可续跑的检查点");
+        var checkpoint = records.get("run-continuations", id, Continuation.class).orElseThrow();
+        if (checkpoint.remaining() <= 1000 || checkpoint.elapsedMillis() >= deadlineSeconds * 1000L)
+            throw new HttpProblem(409, "原任务总额度或总时限已用尽，已保留结果；请调整任务范围后新建请求");
+        var command = new ChatCommand("继续完成原任务", checkpoint.command().topic(), checkpoint.command().version(), false, requestId);
+        return create(previous.sessionId(), command, new Continuation(checkpoint.command(), id, checkpoint.remaining(), checkpoint.elapsedMillis()));
+    }
     private final ThreadPoolExecutor workers = new ThreadPoolExecutor(2, 4, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(16));
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
     private final ConcurrentHashMap<String, Job> jobs = new ConcurrentHashMap<>();
 
     private static class Job {
         final long queuedAt = System.nanoTime();
+        volatile boolean timedOut;
         final AtomicBoolean cancelled = new AtomicBoolean();
+        Continuation continuation;
         volatile FutureTask<Void> task;
         volatile ScheduledFuture<?> timeout;
     }
@@ -64,6 +92,10 @@ public class ChatRunService implements AutoCloseable {
     }
 
     public AiRun create(String session, ChatCommand input) {
+        return create(session, input, new Continuation(input, null, tokenBudget, 0));
+    }
+
+    private AiRun create(String session, ChatCommand input, Continuation continuation) {
         sessions.session(session);
         if (input.requestId() == null || input.requestId().isBlank()) throw new HttpProblem(400, "缺少请求标识");
         String hash;
@@ -81,6 +113,8 @@ public class ChatRunService implements AutoCloseable {
         var identity = TenantContext.require();
         String id = created.run().id();
         Job job = new Job();
+        job.continuation = continuation;
+        records.put("run-continuations", id, continuation);
         Context parent = Context.current();
         job.task = new FutureTask<>(() -> {
             try (var parentScope = parent.makeCurrent()) {
@@ -92,9 +126,10 @@ public class ChatRunService implements AutoCloseable {
         try {
             job.timeout = timer.schedule(() -> {
                 try (var scope = TenantContext.open(identity)) {
+                    job.timedOut = true;
                     cancel(id);
                 }
-            }, deadlineSeconds, TimeUnit.SECONDS);
+            }, Math.max(1, deadlineSeconds * 1000L - continuation.elapsedMillis()), TimeUnit.MILLISECONDS);
             workers.execute(job.task);
         } catch (RejectedExecutionException e) {
             jobs.remove(id);
@@ -121,48 +156,27 @@ public class ChatRunService implements AutoCloseable {
     }
 
     private void executeBody(String id, ChatCommand input, LoginIdentity identity, Job job) {
-        try (var scope = TenantContext.open(identity); var context = RunContext.open(id, job.cancelled::get, tokenBudget)) {
+        try (var scope = TenantContext.open(identity); var context = RunContext.open(id, job.cancelled::get, job.continuation.remaining(), job.continuation.parentId())) {
+            try {
             if (!runs.start(id)) throw new CancellationException();
-            StringBuilder pending = new StringBuilder();
-            long[] last = {0};
-            chat.turn(runs.get(id).sessionId(), input.message(), input.topic(), input.version(), input.rewrite(), event -> {
-                RunContext.check();
-                switch (event) {
-                    case ChatEvent.AnswerReset ignored -> {
-                        pending.setLength(0);
-                        runs.append(id, "answer-reset", Map.of());
-                    }
-                    case ChatEvent.Delta delta -> {
-                        pending.append(delta.text());
-                        long now = System.nanoTime();
-                        if (last[0] == 0 || pending.length() >= 48 || now - last[0] >= 100_000_000L) {
-                            flushPending(id, pending);
-                            last[0] = now;
-                        }
-                    }
-                    case ChatEvent.Sources sources -> {
-                        flushPending(id, pending);
-                        runs.append(id, "sources", sources.citations());
-                    }
-                    case ChatEvent.AgentStatus status -> {
-                        flushPending(id, pending);
-                        runs.append(id, "agent-status", status);
-                    }
-                    case ChatEvent.Recommendations recommendations -> {
-                        flushPending(id, pending);
-                        runs.append(id, "recommendations", recommendations.items());
-                    }
-                    case ChatEvent.Done ignored -> flushPending(id, pending);
-                }
-            }, result -> {
-                flushPending(id, pending);
-                runs.finish(id, AiRun.Status.COMPLETED, "done", result, null);
-            });
+            try (var events = eventPublisher.open(id)) {
+                chat.turn(runs.get(id).sessionId(), input.message(), input.topic(), input.version(), input.rewrite(), event -> {
+                    RunContext.check();
+                    events.accept(event);
+                }, result -> {
+                    events.flush();
+                    runs.finish(id, AiRun.Status.COMPLETED, "done", result, null);
+                });
+            }
+            } finally {
+                records.put("run-continuations", id, new Continuation(job.continuation.command(), job.continuation.parentId(),
+                        RunContext.remaining(), job.continuation.elapsedMillis() + (System.nanoTime() - job.queuedAt) / 1_000_000));
+            }
         } catch (Exception e) {
             Thread.interrupted();
             try (var scope = TenantContext.open(identity)) {
                 boolean cancelled = job.cancelled.get() || e instanceof CancellationException;
-                String error = cancelled ? "任务已停止，已生成的部分内容仍可查看" : e instanceof IllegalArgumentException ? e.getMessage() : "生成未完成，请查看任务状态后重试";
+                String error = cancelled ? (job.timedOut ? "任务总时限已到，已生成内容已保留；请缩小范围后新建任务" : "任务已停止，已生成的部分内容仍可查看") : e instanceof IllegalArgumentException ? e.getMessage() : "生成未完成，请查看任务状态后重试";
                 runs.finish(id, cancelled ? AiRun.Status.CANCELLED : AiRun.Status.FAILED, "error", Map.of("message", error), error);
                 if (!cancelled) {
                     Throwable cause = e;
@@ -174,13 +188,6 @@ public class ChatRunService implements AutoCloseable {
         } finally {
             jobs.remove(id);
             if (job.timeout != null) job.timeout.cancel(false);
-        }
-    }
-
-    private void flushPending(String id, StringBuilder pending) {
-        if (!pending.isEmpty()) {
-            runs.append(id, "delta", new ChatEvent.Delta(pending.toString()));
-            pending.setLength(0);
         }
     }
 
@@ -209,7 +216,8 @@ public class ChatRunService implements AutoCloseable {
             if (job.timeout != null) job.timeout.cancel(false);
         }
         // Publish cancellation immediately; provider interruption remains best effort.
-        runs.finish(id, AiRun.Status.CANCELLED, "error", Map.of("message", "任务已停止，已生成的部分内容仍可查看"), "任务已停止");
+        String notice = job != null && job.timedOut ? "任务总时限已到，已生成内容已保留；请缩小范围后新建任务" : "任务已停止，已生成的部分内容仍可查看";
+        runs.finish(id, AiRun.Status.CANCELLED, "error", Map.of("message", notice), notice);
         return runs.get(id);
     }
 

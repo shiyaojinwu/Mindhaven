@@ -6,6 +6,10 @@ import com.mindhaven.integration.ai.AiGateway;
 import com.mindhaven.integration.ai.PromptRepository;
 import com.mindhaven.manager.MessageManager;
 import com.mindhaven.model.chat.ChatMessage;
+import com.mindhaven.model.chat.PreparedContext;
+import com.mindhaven.model.chat.ContextPlan;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import com.mindhaven.model.chat.ChatEvent;
 import com.mindhaven.model.chat.Metrics;
 import com.mindhaven.model.chat.Session;
@@ -22,6 +26,7 @@ import com.mindhaven.service.knowledge.KnowledgeService;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.UUID;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,7 +101,9 @@ public class ChatService {
             String query = rewrite && !safety && !agentMode && intent.retrieve() ? rewriter.rewrite(input, complete, summary) : input;
             var retrieval = agentMode ? new RetrievalResult("agent", List.of(), List.of()) : safety ? new RetrievalResult("safety", List.of(), List.of()) : intent.retrieve() ? knowledge.retrieve(query, topic, version, 4) : new RetrievalResult(intent.mode(), List.of(), List.of());
             var found = retrieval.citations();
-            var prepared = contexts.prepare(id, safety ? List.of() : complete, summary, input, found);
+            var prepared = agentMode && RunContext.parentId() != null
+                    ? new PreparedContext(new ContextPlan(List.of(new SystemMessage(""), new UserMessage(input)), List.of(), 0), summary)
+                    : contexts.prepare(id, safety ? List.of() : complete, summary, input, found);
             var plan = prepared.plan();
             summary = prepared.summary();
             long seq = messages.maxSequence(id) + 1;
@@ -115,15 +122,28 @@ public class ChatService {
             List<Recommendation> recommendations = List.of();
             int contextEstimate = plan.estimate();
             boolean incomplete = false;
+            List<ChatEvent.AgentStatus> execution = new ArrayList<>();
             if (safety) {
                 String help = "听到你这样说，我很在意你现在的安全。你此刻是否处在危险中，或者已经伤害了自己？如果是，请立即联系当地急救服务，并请身边可信任的人陪着你。你不需要独自面对这些。这个应用无法提供紧急救援。";
                 delta.accept(help);
                 response = new AiGateway.Result(help, null, null);
             } else if (agentMode) {
                 var result = agent.run(plan.messages(), topic, version, agentEvent -> {
+                    if (agentEvent instanceof ChatEvent.AgentStatus stage) execution.add(stage);
                     if (agentEvent instanceof ChatEvent.Delta chunk) delta.accept(chunk.text());
                     else {
-                        if (agentEvent instanceof ChatEvent.AnswerReset) { answer.setLength(0); first[0] = -1; }
+                        if (agentEvent instanceof ChatEvent.AnswerReset) {
+                            // Archive the complete draft, including chunks still buffered by the event publisher.
+                            if (!answer.toString().isBlank()) {
+                                int step = execution.isEmpty() ? 1 : execution.getLast().step();
+                                var draft = new ChatEvent.AgentStatus("draft", "中间草稿 · 已撤回，非最终答案",
+                                        step, null, null, null, answer.toString());
+                                execution.add(draft);
+                                event.accept(draft);
+                            }
+                            answer.setLength(0);
+                            first[0] = -1;
+                        }
                         event.accept(agentEvent);
                     }
                 });
@@ -136,7 +156,7 @@ public class ChatService {
                 contextEstimate = result.contextEstimate();
             } else response = ai.stream("answer", plan.messages(), settings.outputBudget(), delta);
             var citationCheck = citationVerifier.verify(answer.toString(), usedCitations);
-            var assistant = new ChatMessage(UUID.randomUUID().toString(), id, seq + 1, "assistant", answer.toString(), now(), usedCitations, incomplete ? "partial" : "complete", citationCheck, recommendations);
+            var assistant = new ChatMessage(UUID.randomUUID().toString(), id, seq + 1, "assistant", answer.toString(), now(), usedCitations, incomplete ? "partial" : "complete", citationCheck, recommendations, execution);
             var doneUser = new ChatMessage(user.id(), id, seq, "user", input, user.createdAt(), List.of(), "complete");
             var metrics = new Metrics(UUID.randomUUID().toString(), id, settings.aiMode(), settings.aiMode().equals("demo") ? "deterministic-demo" : settings.chatModel(), prompts.get(agentMode ? "agent" : "answer").hash(), version, query, found.size(), found.stream().map(Citation::id).toList(), contextEstimate, response.promptTokens(), response.completionTokens(), first[0], (System.nanoTime() - started) / 1_000_000, summary == null ? 0 : summary.version(), summary == null ? 0 : summary.coveredThroughSeq(), citationCheck.passed(), now(), citationCheck, retrieval.mode(), retrieval.matches(), usedCitations.stream().map(Citation::id).toList(), retrieval.configuration());
             RunContext.check();

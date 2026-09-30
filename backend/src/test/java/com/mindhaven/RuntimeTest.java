@@ -1,5 +1,8 @@
 package com.mindhaven;
 
+import com.mindhaven.manager.RecordManager;
+import com.mindhaven.service.event.RunEventPublisher;
+
 import com.mindhaven.service.chat.SessionService;
 import com.mindhaven.model.chat.ChatEvent;
 
@@ -43,6 +46,8 @@ import static org.mockito.Mockito.*;
 class RuntimeTest {
     @Autowired
     AuthService auth;
+    @Autowired
+    RunEventPublisher eventPublisher;
     @Autowired
     ChatService chat;
     @Autowired
@@ -140,6 +145,8 @@ class RuntimeTest {
             return null;
         }).when(fake).turn(anyString(), anyString(), anyString(), anyString(), anyBoolean(), any(), any());
         var isolated = new ChatRunService(OpenTelemetry.noop().getTracer("test"), fake, fakeSessions, runs, json, 30, 24000);
+        isolated.records(mock(RecordManager.class));
+        isolated.eventPublisher(eventPublisher);
         try {
             var run = isolated.create("test", command("测试取消", "cancel"));
             assertThat(emitted.await(3, TimeUnit.SECONDS)).isTrue();

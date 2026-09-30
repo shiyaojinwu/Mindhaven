@@ -24,11 +24,19 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
 mindhaven:
+  events:
+    store: ${RUN_EVENT_STORE:database}
+    redis-uri: ${REDIS_URI:redis://127.0.0.1:6379}
+    retention-seconds: ${RUN_EVENT_RETENTION_SECONDS:1800}
+    reader-groups: ${RUN_EVENT_READER_GROUPS:2}
+    max-subscribers: ${RUN_EVENT_MAX_SUBSCRIBERS:512}
+    queue-events: ${SSE_QUEUE_EVENTS:256}
+    queue-bytes: ${SSE_QUEUE_BYTES:1048576}
   agent:
     enabled: ${AGENT_ENABLED:true}
-    max-steps: ${AGENT_MAX_STEPS:4}
-    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:3}
-    max-searches: ${AGENT_MAX_SEARCHES:2}
+    max-steps: ${AGENT_MAX_STEPS:64}
+    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:0}
+    max-searches: ${AGENT_MAX_SEARCHES:0}
     tool-result-budget: ${AGENT_TOOL_RESULT_BUDGET:2400}
   tracing:
     sample-rate: ${TRACE_SAMPLE_RATE:1.0}
@@ -70,6 +78,8 @@ mindhaven:
   context:
     compression-enabled: ${CONTEXT_COMPRESSION_ENABLED:true}
     compression-threshold: ${CONTEXT_COMPRESSION_THRESHOLD:0.8}
+    summary-ratio: ${CONTEXT_SUMMARY_RATIO:0.05}
+    summary-max-tokens: ${CONTEXT_SUMMARY_MAX_TOKENS:2000}
     keep-recent-turns: ${CONTEXT_KEEP_RECENT_TURNS:3}
     max-compression-passes: ${CONTEXT_MAX_COMPRESSION_PASSES:4}
     max-input-characters: ${CHAT_MAX_INPUT_CHARACTERS:1500}

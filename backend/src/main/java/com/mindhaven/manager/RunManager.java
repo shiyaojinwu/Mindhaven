@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mindhaven.common.error.HttpProblem;
+import com.mindhaven.integration.events.RunEventStore;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.mindhaven.mapper.*;
 import com.mindhaven.model.chat.AiRun;
 import com.mindhaven.model.entity.RunEntity;
@@ -26,6 +28,13 @@ public class RunManager {
     private final RunMapper runs;
     private final RunEventMapper events;
     private final ObjectMapper json;
+    private RunEventStore eventStore;
+    private RunOutboxMapper outbox;
+    @Autowired
+    public void eventStore(RunEventStore store, RunOutboxMapper outbox) {
+        this.eventStore = store;
+        this.outbox = outbox;
+    }
 
     public RunManager(RunMapper runs, RunEventMapper events, ObjectMapper json) {
         this.runs = runs;
@@ -126,7 +135,14 @@ public class RunManager {
         if (!status.terminal()) throw new IllegalArgumentException("Expected terminal state");
         var who = TenantContext.require();
         var seq = runs.finishSequence(id, who.tenantId(), who.userId(), status.name(), Instant.now().toString(), error);
-        if (!seq.isEmpty()) insert(id, seq.getFirst(), name, payload);
+        if (!seq.isEmpty()) {
+            if (eventStore.ephemeral()) {
+                try {
+                    outbox.insert(id + ":terminal", id, name, json.writeValueAsString(payload),
+                            json.writeValueAsString(get(id)), Instant.now().toString());
+                } catch (JsonProcessingException e) { throw new IllegalStateException(e); }
+            } else insert(id, seq.getFirst(), name, payload);
+        }
         else if (status == AiRun.Status.COMPLETED && get(id).cancelRequested())
             throw new CancellationException("任务已停止");
     }
@@ -147,6 +163,17 @@ public class RunManager {
     @Transactional
     public void recoverInterrupted() {
         // Startup recovery deliberately spans tenants in this single-runtime deployment.
+        var interrupted = runs.selectList(new QueryWrapper<RunEntity>().in("status", "QUEUED", "RUNNING"));
         runs.update(null, new UpdateWrapper<RunEntity>().in("status", "QUEUED", "RUNNING").set("status", "INTERRUPTED").set("error", "服务已重启，本次任务未自动重试").set("updated_at", Instant.now().toString()));
+        if (eventStore.ephemeral()) for (var row : interrupted) {
+            row.setStatus("INTERRUPTED");
+            row.setError("服务已重启，本次任务未自动重试");
+            row.setUpdatedAt(Instant.now().toString());
+            try {
+                outbox.insert(row.getId() + ":terminal", row.getId(), "error",
+                        json.writeValueAsString(Map.of("message", row.getError())),
+                        json.writeValueAsString(model(row)), row.getUpdatedAt());
+            } catch (JsonProcessingException e) { throw new IllegalStateException(e); }
+        }
     }
 }

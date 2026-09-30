@@ -42,6 +42,24 @@ class AutoContextTest {
     }
 
     @Test
+    void summaryBudgetUsesFivePercentWithAnIndependentUpperBound() {
+        var policy = new ContextSettings(true, .8, 3, 4, 1500);
+        assertThat(policy.summaryBudget(10000)).isEqualTo(500);
+        assertThat(policy.summaryBudget(384000)).isEqualTo(2000);
+    }
+
+    @Test
+    void oversizedGeneratedSummaryFallsBackWithinBudget() {
+        var service = service(true, 1800);
+        when(ai.complete(eq("summary"), anyList(), anyInt()))
+                .thenReturn(new AiGateway.Result("x".repeat(1000), null, null));
+        var result = service.prepare("s", history(7, 100), null, "question", List.of());
+        assertThat(ContextPlanner.estimate(result.summary().content())).isLessThanOrEqualTo(90);
+        assertThat(result.summary().content()).contains("不得猜测");
+        assertThat(result.plan().messages().getLast().getText()).contains("question");
+    }
+
+    @Test
     void belowThresholdKeepsAllHistoryWithoutCallingSummary() {
         var service = service(true, 5000);
         var result = service.prepare("s", history(7, 100), null, "question", List.of());
@@ -58,9 +76,10 @@ class AutoContextTest {
         // Pick a window whose 80% threshold is exactly the candidate estimate.
         int window = (int) Math.ceil(size / .8);
         var service = service(true, window);
-        when(ai.complete(eq("summary"), anyList(), eq(500))).thenReturn(new AiGateway.Result("compressed facts", null, null));
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenReturn(new AiGateway.Result("compressed facts", null, null));
         var result = service.prepare("s", history, null, "question", List.of());
         assertThat(result.summary().coveredThroughSeq()).isEqualTo(8);
+        verify(ai).complete(eq("summary"), anyList(), eq(new ContextSettings(true, .8, 3, 4, 1500).summaryBudget(window)));
         assertThat(result.plan().messages()).hasSize(9);
         assertThat(result.plan().messages().subList(2, 8)).extracting(m -> m.getText()).containsExactlyElementsOf(history.subList(8, 14).stream().map(ChatMessage::content).toList());
         verify(records).put("summaries", "s", result.summary());
@@ -70,7 +89,7 @@ class AutoContextTest {
     void incrementalCompressionDoesNotRepeatCoveredMessages() {
         var previous = new Summary("s", 4, 4, "previous facts", "now");
         var service = service(true, 1900);
-        when(ai.complete(eq("summary"), anyList(), eq(500))).thenAnswer(call -> {
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenAnswer(call -> {
             List<Message> messages = call.getArgument(1);
             assertThat(messages.getLast().getText()).contains("previous facts", "message-5-").doesNotContain("message-1-", "message-2-");
             return new AiGateway.Result("updated facts", null, null);
@@ -81,18 +100,22 @@ class AutoContextTest {
     }
 
     @Test
-    void failedSummaryLeavesCoverageUnchanged() {
+    void failedSummaryMarksUnavailableHistoryAndKeepsCurrentInput() {
         var service = service(true, 1800);
-        when(ai.complete(eq("summary"), anyList(), eq(500))).thenReturn(new AiGateway.Result("", null, null));
-        assertThatThrownBy(() -> service.prepare("s", history(7, 100), null, "question", List.of())).isInstanceOf(IllegalStateException.class);
-        verifyNoInteractions(records);
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenReturn(new AiGateway.Result("", null, null));
+        var result = service.prepare("s", history(7, 100), null, "question", List.of());
+        assertThat(result.summary().content()).contains("不得猜测");
+        assertThat(result.plan().messages().getLast().getText()).contains("question");
+        verify(records).put("summaries", "s", result.summary());
     }
 
     @Test
-    void doesNotSilentlyDropRecentTurnsWhenTheyCannotFit() {
+    void compressesRecentTurnsWhenTheyCannotFit() {
         var service = service(true, 1800);
-        assertThatThrownBy(() -> service.prepare("s", history(3, 400), null, "question", List.of())).isInstanceOf(IllegalArgumentException.class);
-        verifyNoInteractions(ai, records);
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenReturn(new AiGateway.Result("用户事实", null, null));
+        var result = service.prepare("s", history(3, 400), null, "question", List.of());
+        assertThat(result.summary().coveredThroughSeq()).isGreaterThan(0);
+        assertThat(result.plan().messages().getLast().getText()).contains("question");
     }
 
     @Test
@@ -104,12 +127,12 @@ class AutoContextTest {
     }
 
     @Test
-    void laterBatchFailureDoesNotPersistPartialSummary() {
+    void laterBatchFailureRetainsExplicitMissingHistoryNotice() {
         var service = service(true, 1800);
-        when(ai.complete(eq("summary"), anyList(), eq(500))).thenReturn(new AiGateway.Result("first batch summary", null, null)).thenThrow(new IllegalStateException("provider failed"));
-        assertThatThrownBy(() -> service.prepare("s", history(12, 100), null, "question", List.of())).hasMessage("provider failed");
-        verify(ai, times(2)).complete(eq("summary"), anyList(), eq(500));
-        verifyNoInteractions(records);
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenReturn(new AiGateway.Result("first batch summary", null, null)).thenThrow(new IllegalStateException("provider failed"));
+        var result = service.prepare("s", history(12, 100), null, "question", List.of());
+        assertThat(result.summary().content()).contains("原文仍保留");
+        verify(records).put("summaries", "s", result.summary());
     }
 
     @Test

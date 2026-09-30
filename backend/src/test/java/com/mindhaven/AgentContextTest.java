@@ -55,7 +55,7 @@ class AgentContextTest {
         }
         messages.add(new UserMessage("current"));
         var recent = new ArrayList<>(messages.subList(messages.size()-7, messages.size()));
-        when(ai.complete(eq("summary"), anyList(), eq(500))).thenReturn(new AiGateway.Result("old facts", 10, 10));
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenReturn(new AiGateway.Result("old facts", 10, 10));
         // Summary input itself must fit the model window.
         when(settings.contextBudget()).thenReturn(6000);
         try (var run = RunContext.open("test", () -> false, 30000)) {
@@ -102,12 +102,12 @@ class AgentContextTest {
         var current = new UserMessage("current question");
         var messages = new ArrayList<Message>(List.of(new SystemMessage("s".repeat(800)),
                 new UserMessage("old" + "x".repeat(1300)), new AssistantMessage("a".repeat(1100)), current, call, tool));
-        when(ai.complete(eq("summary"), anyList(), eq(500)))
+        when(ai.complete(eq("summary"), anyList(), anyInt()))
                 .thenReturn(new AiGateway.Result("important earlier facts", 10, 10));
         try (var run = RunContext.open("test", () -> false, 20000)) {
             context.prepare(messages, List.of(), 2);
         }
-        verify(ai).complete(eq("summary"), anyList(), eq(500));
+        verify(ai).complete(eq("summary"), anyList(), anyInt());
         assertThat(messages).containsSubsequence(current, call);
         assertThat(messages.get(1).getText()).contains("important earlier facts");
         assertThat(((ToolResponseMessage) messages.getLast()).getResponses().getFirst().id()).isEqualTo("call");
@@ -119,7 +119,7 @@ class AgentContextTest {
         var current = new UserMessage("current");
         var messages = new ArrayList<Message>(List.of(new SystemMessage("s".repeat(800)),
                 new UserMessage("x".repeat(1300)), new AssistantMessage("y".repeat(1100)), current));
-        when(ai.complete(eq("summary"), anyList(), eq(500))).thenThrow(new IllegalStateException("provider unavailable"));
+        when(ai.complete(eq("summary"), anyList(), anyInt())).thenThrow(new IllegalStateException("provider unavailable"));
         try (var run = RunContext.open("test", () -> false, 20000)) {
             context.prepare(messages, List.of(), 2);
         }
@@ -137,6 +137,21 @@ class AgentContextTest {
         assertThat(context.recover(messages, 1)).isTrue();
         assertThat(messages.getLast()).isSameAs(current);
         assertThat(context.recover(messages, 1)).isFalse();
+    }
+
+    @Test
+    void compactingPageNeverRewindsActualCursorOrReturnedCount() throws Exception {
+        var call = AssistantMessage.builder().content("").toolCalls(List.of(
+                new AssistantMessage.ToolCall("page", "function", "findCourses", "{}"))).build();
+        String payload = "{\"total\":103,\"returned\":30,\"nextOffset\":60,\"hasMore\":true,\"items\":[{\"id\":\"a\"},{\"id\":\"b\",\"text\":\"" + "x".repeat(4000) + "\"}]}";
+        var messages = new ArrayList<Message>(List.of(new SystemMessage("s"), new UserMessage("前100门"), call,
+                ToolResponseMessage.builder().responses(List.of(new ToolResponseMessage.ToolResponse("page", "findCourses", payload))).build()));
+        try (var run = RunContext.open("test", () -> false, 20000)) { context().prepare(messages, List.of(), 1); }
+        var compact = new ObjectMapper().readTree(((ToolResponseMessage) messages.getLast()).getResponses().getFirst().responseData());
+        assertThat(compact.path("nextOffset").asInt()).isEqualTo(60);
+        assertThat(compact.path("returned").asInt()).isEqualTo(30);
+        assertThat(compact.path("visibleItems").asInt()).isEqualTo(1);
+        assertThat(messages.get(1).getText()).isEqualTo("前100门");
     }
 
 }

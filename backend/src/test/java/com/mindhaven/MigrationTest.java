@@ -51,7 +51,7 @@ class MigrationTest {
         }
         var before = jdbc.queryForList("SELECT * FROM tenant_records");
         var flyway = flyway(ds);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(8);
         assertThat(jdbc.queryForList("SELECT * FROM tenant_records")).isEqualTo(before);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_session", Integer.class)).isEqualTo(4);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_message", Integer.class)).isEqualTo(4);

@@ -1,3 +1,4 @@
+import { compareEventIds } from "../../utils/sse.js";
 import type { ChatCommand, ChatRun } from "../../types/chat.js";
 import { ref, nextTick, onBeforeUnmount } from "vue";
 import {
@@ -13,7 +14,9 @@ import {
   createRun,
   recentRuns,
   cancelRun,
+  continueRun,
   subscribeRun,
+  getRun,
 } from "../../api/chat.js";
 
 export function useChat() {
@@ -24,7 +27,7 @@ export function useChat() {
     draft = ref(""),
     topic = ref("全部"),
     version = ref("v1");
-  const agentSteps = ref<{ sequence: number | null; phase: string; label: string; step: number }[]>([]);
+  const agentSteps = ref<{ sequence: string | null; phase: string; label: string; step: number }[]>([]);
   const activeRun = ref(false);
   const sending = ref(false),
     error = ref(""),
@@ -81,27 +84,30 @@ export function useChat() {
       citations: [],
     };
     messages.value.push(partial);
-    let cursor = 0,
-      ended = false;
+    let cursor = "0",
+      ended = false,
+      needsSnapshot = false;
     controller = new AbortController();
     const signal = controller.signal;
     for (
       let attempt = 0;
-      attempt < 4 && !ended && generation === revision;
+      attempt < 36 && !ended && generation === revision;
       attempt++
     ) {
       try {
         await subscribeRun(run.id, cursor, signal, (event, sequence) => {
           if (
             generation !== revision ||
-            (sequence !== null && sequence <= cursor)
+            (sequence !== null && compareEventIds(sequence, cursor) <= 0)
           )
             return;
-          if (sequence !== null) cursor = sequence;
+          if (event.name === "snapshot-required") { needsSnapshot = true; throw new Error("事件已过期，正在加载保存的结果…"); }
+          if (event.name === "transport-error") throw new Error(event.data.message);
           const current = messages.value.find((m) => m.id === partial.id);
           if (event.name === "agent-status") {
             status.value = event.data.label;
             agentSteps.value.push({ ...event.data, sequence });
+            if (current) (current.execution ??= []).push(event.data);
           }
           if (event.name === "recommendations" && current)
             current.recommendations = event.data;
@@ -115,7 +121,10 @@ export function useChat() {
           }
           if (event.name === "done") {
             const index = messages.value.findIndex((m) => m.id === partial.id);
-            if (index >= 0) messages.value[index] = event.data.message;
+            if (index >= 0) messages.value[index] = {
+              ...event.data.message,
+              execution: event.data.message.execution ?? messages.value[index]?.execution,
+            };
             metrics.value = [
               event.data.metrics,
               ...metrics.value.filter((m) => m.id !== event.data.metrics.id),
@@ -140,16 +149,46 @@ export function useChat() {
             if (current && event.data.status !== "COMPLETED")
               current.status = "failed";
           }
+          if (sequence !== null) cursor = sequence;
           void scroll();
         });
       } catch (e) {
         if (signal.aborted || generation !== revision) return;
         status.value = "连接中断，正在恢复原任务…";
-        if (attempt === 3)
+        // Recovery reads the authoritative result even when Redis/outbox cannot deliver terminal.
+        // This is an outage-only fallback, not the normal live event transport.
+        try {
+          const currentRun = await getRun(run.id);
+          if (signal.aborted || generation !== revision) return;
+          if (needsSnapshot && !terminal(currentRun)) {
+            const history = await getMessages(run.sessionId);
+            if (signal.aborted || generation !== revision) return;
+            messages.value = [...history, { ...partial, content: "", status: "pending" }];
+            agentSteps.value = [];
+            cursor = "0";
+            needsSnapshot = false;
+            status.value = "实时片段不完整，已加载保存记录，等待任务结果…";
+          }
+          if (terminal(currentRun)) {
+            const history = await getMessages(run.sessionId);
+            if (signal.aborted || generation !== revision) return;
+            messages.value = history;
+            ended = true;
+            sending.value = false;
+            activeRun.value = false;
+            pending = null;
+            status.value = currentRun.status === "COMPLETED"
+              ? (history.at(-1)?.status === "partial" ? "已保留部分回复，可继续" : "回复已完成")
+              : currentRun.error || "本次任务已结束";
+            error.value = currentRun.status === "COMPLETED" ? "" : currentRun.error || "任务已结束";
+            break;
+          }
+        } catch { /* Bounded transport retry below; never submit another model run. */ }
+        if (attempt === 35)
           error.value = "连接暂时不可用，可点击恢复连接；不会重新生成回答。";
         else
           await new Promise((resolve) =>
-            setTimeout(resolve, 600 * (attempt + 1)),
+            setTimeout(resolve, Math.min(5000, 600 * (attempt + 1))),
           );
       }
     }
@@ -190,6 +229,7 @@ export function useChat() {
     window.sessionStorage.setItem("mindhaven:session", id);
     await scroll(true);
     const latest = runs[0];
+    if (latest) runId.value = latest.id;
     if (latest && latest.status !== "COMPLETED")
       void attach(latest, generation);
   }
@@ -251,6 +291,24 @@ export function useChat() {
       sending.value = false;
     }
   }
+  async function continueTask() {
+    if (!runId.value || sending.value || activeRun.value) return;
+    const generation = revision;
+    sending.value = true;
+    error.value = "";
+    try {
+      const run = await continueRun(runId.value);
+      if (generation !== revision) return;
+      if (terminal(run)) { await openSession(run.sessionId); return; }
+      detach();
+      await attach(run, revision);
+    } catch (e) {
+      if (generation === revision) {
+        error.value = (e as Error).message;
+        sending.value = false;
+      }
+    }
+  }
   async function stop() {
     if (!runId.value) return;
     try {
@@ -289,6 +347,7 @@ export function useChat() {
     send,
     stop,
     reconnect,
+    continueTask,
     scroll,
   };
 }

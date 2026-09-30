@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 
 @Service
 public class ConversationContextService {
@@ -51,20 +52,31 @@ public class ConversationContextService {
         var remaining = planner.uncovered(history, summary);
         int trigger = Math.min((int) (settings.contextBudget() * policy.compressionThreshold()), ContextPlanner.inputLimit(settings));
         var candidate = planner.candidate(remaining, summary, input, documents, settings);
-        if (policy.compressionEnabled() && candidate.estimate() >= trigger && remaining.size() > policy.keepRecentTurns() * 2) {
-            // Once triggered, compact all older turns; keep the newest configured turns verbatim.
-            int end = remaining.size() - policy.keepRecentTurns() * 2;
-            List<ChatMessage> older = new ArrayList<>(remaining.subList(0, end));
+        if (policy.compressionEnabled() && candidate.estimate() >= trigger) {
+            int target = trigger;
             int passes = 0;
-            while (!older.isEmpty()) {
-                if (++passes > policy.maxCompressionPasses()) {
-                    throw new IllegalArgumentException("历史较长，超过单次压缩预算；请新建对话或调整后端配置，原始记录仍保留");
+            while (!remaining.isEmpty() && planner.candidate(remaining, summary, input, documents, settings).estimate() >= target
+                    && passes++ < policy.maxCompressionPasses()) {
+                int end = Math.max(2, remaining.size() - policy.keepRecentTurns() * 2);
+                List<ChatMessage> older = new ArrayList<>(remaining.subList(0, Math.min(end, remaining.size())));
+                try {
+                    summary = compress(session, older, summary);
+                } catch (CancellationException e) {
+                    throw e;
+                } catch (RuntimeException e) {
+                    RunContext.check();
+                    // Keep the source intact. Explicitly mark unavailable history instead of inventing facts.
+                    String notice = "历史缺失，原文仍保留。不得猜测；必要时澄清。";
+                    int budget = policy.summaryBudget(settings.contextBudget());
+                    String retained = summary == null ? "" : summary.content();
+                    String fallback = retained + "\n" + notice;
+                    if (ContextPlanner.estimate(fallback) > budget) fallback = notice;
+                    summary = new Summary(session, summary == null ? 1 : summary.version() + 1,
+                            older.getLast().seq(), fallback,
+                            Instant.now().toString());
                 }
-                summary = compress(session, older, summary);
-                long covered = summary.coveredThroughSeq();
-                older.removeIf(message -> message.seq() <= covered);
+                remaining = planner.uncovered(remaining, summary);
             }
-            remaining = planner.uncovered(remaining, summary);
         }
         // Drop low-priority documents if necessary, never silently discard recent conversation turns.
         var plan = planner.plan(remaining, summary, input, documents, settings);
@@ -79,7 +91,9 @@ public class ConversationContextService {
     private Summary compress(String session, List<ChatMessage> older, Summary previous) {
         String system = prompts.get("summary").text();
         StringBuilder input = new StringBuilder("已有摘要：").append(previous == null ? "无" : previous.content()).append("\n新增完整轮次：");
-        int limit = settings.contextBudget() - 500 - 200;
+        int budget = policy.summaryBudget(settings.contextBudget());
+        system += "\n摘要按紧凑事实记录组织，输出预算为 " + budget + " Token；保留用户目标和约束，不扩写。";
+        int limit = settings.contextBudget() - budget - 200;
         long covered = -1;
         for (int i = 0; i + 1 < older.size(); i += 2) {
             var user = older.get(i);
@@ -91,8 +105,8 @@ public class ConversationContextService {
         }
         if (covered < 0) throw new IllegalArgumentException("单轮历史超过摘要输入预算，原始记录仍保留，请新建对话");
         RunContext.check();
-        String content = ai.complete("summary", List.of(new SystemMessage(system), new UserMessage(input.toString())), 500).text();
-        if (content == null || content.isBlank() || ContextPlanner.estimate(content) > 1400) {
+        String content = ai.complete("summary", List.of(new SystemMessage(system), new UserMessage(input.toString())), budget).text();
+        if (content == null || content.isBlank() || ContextPlanner.estimate(content) > budget) {
             throw new IllegalStateException("摘要为空或超出预算，原摘要及覆盖范围保持不变");
         }
         RunContext.check();
