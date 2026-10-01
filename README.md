@@ -6,11 +6,18 @@
 
 从对话到资料引用，再到工具调用过程，都可以在 AI 倾听室中查看。
 
-| 对话与资料引用 | Agent 执行过程 |
-| --- | --- |
-| ![AI 对话与资料引用](docs/images/ai-chat.png) | ![Agent 执行过程](docs/images/ai-execution.png) |
+**对话与资料引用**
 
-<sub>实际界面截图，内容为项目展示用演示对话。点击图片可查看大图。</sub>
+![AI 对话与资料引用](docs/images/ai-chat.png)
+
+<details>
+<summary>展开查看 Agent 执行过程</summary>
+
+![Agent 执行过程](docs/images/ai-execution.png)
+
+</details>
+
+<sub>独立浏览器完整界面截图，展示导航、会话列表与 AI 对话。点击图片可查看大图。</sub>
 
 ## 可以做什么
 

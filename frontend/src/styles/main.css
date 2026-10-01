@@ -2344,8 +2344,11 @@ button:disabled {
 .chat-workspace .messages { min-height: 0; padding: 20px clamp(14px, 3vw, 40px); }
 .chat-workspace .message-body { max-width: min(92%, 900px); }
 .chat-workspace .chat-toolbar { padding: 9px 16px; }
-.chat-workspace .composer { margin: 0 16px; padding: 10px 12px; }
-.chat-workspace .composer textarea { min-height: 40px; max-height: min(120px, 20dvh); }
+.chat-workspace .composer { margin: 0 16px; padding: 8px 12px; }
+.chat-workspace .chat-window .composer textarea { display: block; min-height: 26px; max-height: min(120px, 20dvh); }
+.chat-workspace .composer-actions { margin-top: 4px; gap: 8px; }
+.chat-workspace .composer-actions small { display: inline; margin: 0 0 0 10px; }
+.chat-workspace .send-button { width: 30px; height: 30px; }
 .chat-workspace .chat-disclaimer { padding: 6px 16px; margin: 0; }
 @media (max-width: 640px) {
   .chat-workspace > main { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }

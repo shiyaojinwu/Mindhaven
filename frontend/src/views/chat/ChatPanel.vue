@@ -235,6 +235,7 @@ async function startNew() {
         <label class="sr-only" for="chat-draft">想说的话</label
         ><textarea
           id="chat-draft"
+          rows="1"
           v-model="draft"
           maxlength="1500"
           placeholder="慢慢说，我在听…"
