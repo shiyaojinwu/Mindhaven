@@ -1,49 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { Citation } from "../../types/knowledge.js";
+import { renderMarkdown } from "./markdown.js";
 const props = defineProps<{ content: string; sources: Citation[] }>();
 const emit = defineEmits<{ source: [Citation] }>();
-// Render ordinary text and known source buttons only; never insert model-supplied HTML.
-const parts = computed(() => {
-  const result: { text: string; source?: Citation; number?: number }[] = [];
-  const pattern =
-    /(?<!\\)\[([A-Za-z0-9][A-Za-z0-9_.:\-]*(?:\s*[,，、]\s*[A-Za-z0-9][A-Za-z0-9_.:\-]*)*)\](?!\()/g;
-  let cursor = 0;
-  for (const match of props.content.matchAll(pattern)) {
-    result.push({ text: props.content.slice(cursor, match.index) });
-    for (const id of match[1].split(/\s*[,，、]\s*/)) {
-      const index = props.sources.findIndex((s) => s.id === id);
-      result.push(
-        index < 0
-          ? { text: `[${id}]` }
-          : {
-              text: `[${index + 1}]`,
-              number: index + 1,
-              source: props.sources[index],
-            },
-      );
-    }
-    cursor = match.index! + match[0].length;
-  }
-  result.push({ text: props.content.slice(cursor) });
-  return result;
-});
+const html = computed(() => renderMarkdown(props.content, props.sources));
+function onClick(event: MouseEvent) {
+  const button = (event.target as Element).closest<HTMLButtonElement>("button[data-source-index]");
+  if (!button) return;
+  const source = props.sources[Number(button.dataset.sourceIndex)];
+  if (source) emit("source", source);
+}
 </script>
 <template>
-  <template v-for="(part, i) in parts" :key="i"
-    ><button
-      v-if="part.source"
-      class="inline-source"
-      :title="part.source.title"
-      :aria-label="`查看来源 ${part.number}：${part.source.title}`"
-      @click="emit('source', part.source)"
-    >
-      {{ part.text }}</button
-    ><template v-else>{{ part.text }}</template></template
-  >
+  <div class="markdown-content" @click="onClick" v-html="html"></div>
 </template>
 <style scoped>
-.inline-source {
+:deep(.inline-source) {
   display: inline;
   padding: 0 3px;
   border: 0;
@@ -54,11 +27,26 @@ const parts = computed(() => {
   font-weight: 600;
   cursor: pointer;
 }
-.inline-source:hover {
+:deep(.inline-source):hover {
   text-decoration: underline;
 }
-.inline-source:focus-visible {
+:deep(.inline-source):focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
+.markdown-content { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.markdown-content :deep(> :first-child) { margin-top: 0; }
+.markdown-content :deep(> :last-child) { margin-bottom: 0; }
+.markdown-content :deep(p) { margin: .65em 0; }
+.markdown-content :deep(h1), .markdown-content :deep(h2), .markdown-content :deep(h3), .markdown-content :deep(h4), .markdown-content :deep(h5), .markdown-content :deep(h6) { font-size: 1.1em; line-height: 1.5; margin: 1em 0 .4em; }
+.markdown-content :deep(ul), .markdown-content :deep(ol) { padding-left: 1.5em; margin: .6em 0; }
+.markdown-content :deep(li) { margin: .3em 0; }
+.markdown-content :deep(blockquote) { border-left: 3px solid #c4a4bd; margin: .8em 0; padding: .1em .8em; color: #776b7d; }
+.markdown-content :deep(pre) { white-space: pre; overflow-x: auto; max-width: 100%; padding: 12px; border-radius: 8px; background: #ece7ef; line-height: 1.6; }
+.markdown-content :deep(code) { font-family: ui-monospace, monospace; font-size: .9em; background: #ece7ef; border-radius: 3px; padding: .1em .25em; }
+.markdown-content :deep(pre code) { padding: 0; }
+.markdown-content :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: .8em 0; }
+.markdown-content :deep(th), .markdown-content :deep(td) { border: 1px solid #d9cddd; padding: 6px 10px; }
+.markdown-content :deep(a) { color: var(--primary, #855b91); text-decoration: underline; }
+.markdown-content :deep(hr) { border: 0; border-top: 1px solid #d9cddd; margin: 1em 0; }
 </style>

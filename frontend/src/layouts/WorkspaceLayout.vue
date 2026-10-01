@@ -40,6 +40,8 @@ import {
   Check,
   Sun,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   X,
   Settings2,
   AlertCircle,
@@ -61,6 +63,15 @@ const nav = [
 ];
 const { showDiscard, resolveDiscard, canLeave } = provideNavigationGuard();
 const page = computed(() => String(route.name ?? "home"));
+const sidebarCollapsed = ref((() => {
+  try { const saved = localStorage.getItem("mindhaven:sidebar-collapsed");
+    return saved === null ? window.innerWidth <= 1100 : saved === "true";
+  } catch { return window.innerWidth <= 1100; }
+})());
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  try { localStorage.setItem("mindhaven:sidebar-collapsed", String(sidebarCollapsed.value)); } catch { /* Layout still works without storage. */ }
+}
 const mobileMenu = ref(false),
   error = ref(""),
   notice = ref(""),
@@ -253,8 +264,8 @@ provide(workspaceKey, {
 </script>
 
 <template>
-  <div class="app-shell">
-    <aside :inert="modalOpen" class="sidebar" :class="{ open: mobileMenu }">
+  <div class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'chat-workspace': page === 'chat' }">
+    <aside id="workspace-navigation" :inert="modalOpen" class="sidebar" :class="{ open: mobileMenu }">
       <a class="brand" href="#" @click.prevent="go('home')"
         ><span class="brand-mark"><Leaf :size="25" /></span
         ><span>心屿<small>MINDHAVEN</small></span></a
@@ -320,6 +331,14 @@ provide(workspaceKey, {
     <main :inert="modalOpen">
       <header class="topbar">
         <div class="breadcrumb">
+          <button class="icon-button desktop-nav-toggle"
+            :aria-label="sidebarCollapsed ? '展开导航' : '收起导航'"
+            :title="sidebarCollapsed ? '展开导航' : '收起导航'"
+            :aria-expanded="!sidebarCollapsed" aria-controls="workspace-navigation"
+            @click="toggleSidebar">
+            <PanelLeftOpen v-if="sidebarCollapsed" :size="20" />
+            <PanelLeftClose v-else :size="20" />
+          </button>
           <button
             class="icon-button mobile-only"
             aria-label="打开导航"
